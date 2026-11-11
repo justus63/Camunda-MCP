@@ -99,23 +99,52 @@ Für den Datei-Modus:
 
 ## Verfügbare Tools
 
-**Datei-Modus** (Parameter `file` = absoluter Pfad):
+**Live-Modus** (wirkt auf das im Modeler aktive Diagramm, alles per Undo rückgängig zu machen):
 
 | Tool | Zweck |
 |---|---|
-| `create_diagram` | neue, leere `.bpmn`-Datei anlegen |
-| `describe_diagram` | Elemente und Verbindungen mit IDs auflisten |
-| `add_element` | Element hinzufügen, optional direkt mit Verbindung (`after`) |
-| `connect` | zwei Elemente verbinden, optional mit FEEL-Bedingung |
-| `update_element` | Name, Job-Typ (Service Task) oder Bedingung ändern |
-| `remove_element` | Element samt Verbindungen löschen |
-| `relayout` | Layout komplett neu berechnen |
+| `live_status` | Verbindung und aktiven Tab prüfen (meldet auch ein veraltetes Plugin) |
+| `live_describe` | Elemente und Verbindungen mit IDs, Typ, Pool/Lane, Event-Typ; mit `geometry: true` auch Positionen |
+| `live_add_element` | Element anlegen (siehe Elementtypen), optional verbunden (`after`), in Pool/Lane/Teilprozess (`parent`), angeheftet (`attachTo`) |
+| `live_connect` | Sequenzfluss, Nachrichtenfluss (zwischen Pools) oder Assoziation; Bedingung, Standardfluss |
+| `live_update_element` | Name, Typ, Event-Definition, Job-Typ, Bedingung, Schleifen-/Multi-Instanz-Markierung, Farbe, Dokumentation, Camunda-8-Eigenschaften |
+| `live_remove_element` | ein oder mehrere Elemente löschen |
+| `live_arrange` | wie mit der Maus: verschieben (auch in andere Lane), Größe, Wegpunkte, Beschriftung, ausrichten, verteilen |
+| `live_batch` | viele Änderungen in einem Aufruf; mit `layout: true` danach automatisch anordnen und prüfen |
+| `live_layout` | Diagramm nach den Modellierungskonventionen anordnen (ein Undo-Schritt) |
+| `live_check` | Prüfung gegen die Konventionen: Darstellung, Benennung, Struktur, Camunda-8-Pflichtangaben |
+| `live_screenshot` | Bild des Diagramms, damit Claude das Ergebnis selbst ansehen kann |
+| `live_undo`, `live_redo`, `live_save` | rückgängig, wiederherstellen, speichern |
 
-**Live-Modus** (wirkt auf das im Modeler aktive Diagramm):
+**Datei-Modus** (Parameter `file` = absoluter Pfad): `create_diagram`, `describe_diagram`, `add_element`, `connect`, `update_element`, `remove_element`, `relayout`, `check_diagram`. Er legt einfache Abläufe an (Ereignisse, Aufgaben, Gateways, Event-Definitionen); `relayout` und `check_diagram` verstehen aber jede Datei, auch mit Pools, Lanes und Teilprozessen.
 
-`live_status`, `live_describe`, `live_add_element`, `live_connect`, `live_update_element`, `live_remove_element`, `live_undo`, `live_save`
+**Elementtypen im Live-Modus:** `startEvent`, `endEvent`, `intermediateCatchEvent`, `intermediateThrowEvent`, `boundaryEvent`, `task`, `userTask`, `serviceTask`, `scriptTask`, `businessRuleTask`, `sendTask`, `receiveTask`, `manualTask`, `callActivity`, `subProcess`, `eventSubProcess`, `transaction`, `adHocSubProcess`, `exclusiveGateway`, `parallelGateway`, `inclusiveGateway`, `eventBasedGateway`, `complexGateway`, `dataObject`, `dataStore`, `textAnnotation`, `group`, `participant` (Pool, optional mit `lanes`), `lane`.
 
-Unterstützte Elementtypen: `startEvent`, `endEvent`, `task`, `userTask`, `serviceTask`, `scriptTask`, `businessRuleTask`, `sendTask`, `receiveTask`, `callActivity`, `exclusiveGateway`, `parallelGateway`, `inclusiveGateway`, `intermediateCatchEvent`, `intermediateThrowEvent`.
+**Event-Definitionen** (`eventDefinition`):
+
+```json
+{ "type": "timer", "timerType": "duration", "value": "P7D" }
+{ "type": "timer", "timerType": "date", "value": "= startDatum" }
+{ "type": "message", "name": "projekt_zugewiesen", "correlationKey": "= mitarbeiterId" }
+{ "type": "signal" | "error" | "escalation", "name": "...", "code": "..." }
+{ "type": "conditional", "value": "= x > 5" }
+{ "type": "terminate" }   { "type": "compensate" }   { "type": "none" }
+```
+
+**Camunda-8-Eigenschaften** (`properties`): `assignee`, `candidateGroups`, `candidateUsers`, `dueDate`, `formId`, `retries`, `calledProcessId`, `decisionId`, `resultVariable`, `script`, `inputs`/`outputs` (`[{source, target}]`), `headers`.
+
+## Layout und Konventionen
+
+`layout.js` ordnet Diagramme nach den Camunda-Best-Practices an (Grundlage: Vorlesung Business Engineering, „Modellierungskonventionen“):
+
+- von links nach rechts, der Normalablauf liegt auf einer geraden Linie
+- Verzweigungen symmetrisch: gleichwertige Zweige ober- und unterhalb, Gateway mittig, Linien über die Gateway-Ecken
+- keine Linie durch ein Element; Rückschleifen laufen außen herum, innere Schleifen innen
+- Zweige bilden getrennte Bänder, dadurch möglichst keine Kreuzungen
+- Beschriftungen stehen frei (Antworten an den Gateway-Ausgängen, Gateway-Frage neben der Linie)
+- Pools, Lanes, aufgeklappte Teilprozesse, angeheftete Ereignisse, Datenobjekte und Anmerkungen werden mit angeordnet
+
+`check.js` prüft dieselben Regeln und zusätzlich: Namensschema (Aufgabe = Objekt + Verb, Gateway = Frage, Ausgänge = Antworten), explizite und symmetrische Gateways, gleiche Aufgabengröße, fehlende Start-/Endereignisse und Camunda-8-Pflichtangaben (Event-Typ, Job-Typ, Bedingungen).
 
 ## So funktioniert die Live-Brücke
 
@@ -148,25 +177,31 @@ Siehe Hinweis in Schritt 1: Es muss eine `package.json` im Projektordner liegen.
 
 ## Grenzen
 
-- Nur **Camunda 8** (Zeebe-Erweiterungen). Der Job-Typ lässt sich nur bei Service Tasks setzen.
-- Datei-Modus: ein Prozess pro Datei, keine Subprozesse, Pools/Lanes, Boundary-Events oder Message-/Timer-Definitionen.
-- Datei-Modus: Das Layout wird bei jeder Änderung automatisch neu berechnet. Manuell verschobene Elemente gehen dabei verloren.
-- Live-Modus: Die automatische Platzierung kann sich überlappen. Ein Aufräumen von Hand ist manchmal nötig.
+- Nur **Camunda 8** (Zeebe-Erweiterungen).
+- Datei-Modus: legt nur flache Abläufe in einem Prozess an. Pools, Lanes, Teilprozesse, Boundary-Events und Artefakte gibt es nur im Live-Modus.
+- Datei-Modus: Das Layout wird bei jeder Änderung neu berechnet. Manuell verschobene Elemente gehen dabei verloren.
+- `live_layout` ordnet immer das ganze Diagramm neu an. Verschachtelte Lanes (Lane in Lane) und zugeklappte Teilprozesse (eigene Zeichenebene) werden nicht angeordnet.
+- Nicht enthalten: Kopieren/Einfügen, Deployment/Ausführung, DMN- und Formular-Editor.
 - Die Plugin-Schnittstelle des Modelers ist laut Camunda-Doku **nicht stabil**. Nach einem Modeler-Update kann das Plugin angepasst werden müssen.
 
 ## Tests
 
-- `node test.js`: Datei-Modus.
-- `node test-live.js <geöffnete.bpmn>`: Live-Modus. Der Modeler muss mit installiertem Plugin laufen und die angegebene Datei geöffnet haben. **Achtung:** Der Test ändert und speichert diese Datei. Nimm also eine Kopie.
+- `npm test`: Datei-Modus plus Live-Modus gegen ein echtes bpmn-js in Headless-Chrome (braucht Google Chrome; anderer Pfad über `CHROME_PATH`). Der Camunda Modeler wird dafür nicht gebraucht.
+- `node test/layout-file.mjs ein.bpmn aus.bpmn aus.png`: eine Datei neu anordnen, prüfen und als Bild rendern.
+- `node test-live.js <geöffnete.bpmn>`: Live-Modus im echten Modeler. **Achtung:** Der Test ändert und speichert diese Datei. Nimm also eine Kopie.
 
 ## Projektstruktur
 
 ```
 server.js            MCP-Server (Datei-Tools, Live-Tools, WebSocket-Brücke)
+layout.js            Layout-Engine nach den Modellierungskonventionen
+check.js             Prüfung gegen die Konventionen
+model.js             Brücke zwischen BPMN-Datei und Layout/Prüfung
 plugin/index.js      Plugin-Manifest für den Modeler
 plugin/client.js     Plugin-Code, läuft im Modeler
 install-plugin.sh    Plugin-Installation (macOS)
 test.js              Test für den Datei-Modus
-test-live.js         Test für den Live-Modus
+test-live.js         Test für den Live-Modus im echten Modeler
+test/                Tests mit bpmn-js in Headless-Chrome, Render-Werkzeug
 beispiel.bpmn        Beispiel-Ergebnis des Datei-Modus
 ```
