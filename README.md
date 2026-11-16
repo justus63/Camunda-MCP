@@ -1,4 +1,4 @@
-# bpmn-mcp
+# Camunda-MCP
 
 An MCP server that lets Claude draw and edit BPMN diagrams for **Camunda Modeler** (Camunda 8 and Camunda 7) – and generate UML class and state diagrams (domain model, object lifecycle). For Camunda 7, Claude can also deploy the models to a running process engine and walk through test runs (complete tasks, fire timers, send messages, inspect instances).
 
