@@ -4,7 +4,7 @@
  * - führt dessen Befehle über bpmn-js "modeling" aus, d. h. mit Undo/Redo
  */
 (function () {
-  var VERSION = 5;
+  var VERSION = 6;
   var PORT = window.__BPMN_MCP_PORT || 17877;
   var URL = 'ws://127.0.0.1:' + PORT;
 
@@ -81,10 +81,30 @@
   function clean(o) { Object.keys(o).forEach(function (k) { if (o[k] === undefined || o[k] === null || o[k] === false) delete o[k]; }); return o; }
   function short(t) { return t.replace('bpmn:', ''); }
   function isA(e, t) { return e.businessObject && e.businessObject.$instanceOf(t); }
-  function rootOf(inj) { return inj.get('canvas').getRootElement(); }
+  // Hauptebene (Prozess/Kollaboration) – auch wenn im Modeler gerade ein zugeklappter Teilprozess geöffnet ist.
+  function rootOf(inj) {
+    var c = inj.get('canvas'), rs = c.getRootElements ? c.getRootElements() : [c.getRootElement()];
+    return rs.filter(function (r) { return r.businessObject && !isA(r, 'bpmn:SubProcess'); })[0] || c.getRootElement();
+  }
+  // Drill-down-Ebene eines zugeklappten Teilprozesses (bpmn-js legt sie als eigenes Root "<id>_plane" an).
+  function planeOf(inj, e) {
+    if (!e || !isA(e, 'bpmn:SubProcess') || (e.di && e.di.isExpanded) || e.parent === undefined) return null;
+    return inj.get('elementRegistry').get(e.id + '_plane') || null;
+  }
+  function inner(inj, c) { return planeOf(inj, c) || c; }
+  function enclosingProcess(bo) { while (bo && bo.$type !== 'bpmn:Process') bo = bo.$parent; return bo; }
+  // Zugeklappte Teilprozesse, deren Ebene Inhalt hat.
+  function subPlanes(inj) {
+    return inj.get('elementRegistry').filter(function (e) {
+      var pl = planeOf(inj, e);
+      return pl && pl.children && pl.children.some(function (k) { return k.type !== 'label'; });
+    }).map(function (e) { return e.id; });
+  }
   function topOf(e) { while (e.parent) e = e.parent; return e; }
   function el(inj, id) {
-    var e = inj.get('elementRegistry').get(id);
+    var reg = inj.get('elementRegistry'), e = reg.get(id);
+    // Prozess-ID in einer Kollaboration: steht nicht in der Registry, gemeint ist der Pool mit diesem Prozess.
+    if (!e) e = reg.filter(function (x) { return isA(x, 'bpmn:Participant') && x.businessObject.processRef && x.businessObject.processRef.id === id; })[0];
     if (!e) throw new Error('Element nicht gefunden: ' + id);
     return e;
   }
@@ -157,8 +177,8 @@
       def.set(prop, f.create('bpmn:FormalExpression', { body: spec.value }));
       def.get(prop).$parent = def;
     } else if (spec.type === 'conditional') {
-      if (!spec.value) throw new Error('Conditional braucht "value" (FEEL-Bedingung).');
-      def.condition = f.create('bpmn:FormalExpression', { body: spec.value });
+      // Ohne value erlaubt (fachliche Modelle); für ausführbare Prozesse meldet die Prüfung die fehlende Bedingung.
+      def.condition = f.create('bpmn:FormalExpression', spec.value ? { body: spec.value } : {});
       def.condition.$parent = def;
     } else if (spec.type === 'link') {
       def.name = spec.name || bo.name || 'Link';
@@ -581,8 +601,10 @@
   }
 
   // ---------- Graph (für Layout, Prüfung und describe) ----------
-  function graph(inj) {
-    var root = rootOf(inj), nodes = [], edges = [], c7 = isC7(inj);
+  function graph(inj, opts) {
+    var plane = opts && opts.plane, nodes = [], edges = [], c7 = isC7(inj);
+    var root = plane ? planeOf(inj, el(inj, plane)) : rootOf(inj);
+    if (!root) throw new Error(plane + ' ist kein zugeklappter Teilprozess mit eigener Ebene.');
     var all = inj.get('elementRegistry').filter(function (e) { return e !== root && e.parent && e.type !== 'label' && !e.labelTarget && e.businessObject && topOf(e) === root; });
     var topLanes = all.filter(function (e) { return isA(e, 'bpmn:Lane') && isA(e.parent, 'bpmn:Participant'); });
     function lb(e) { return e.label ? { x: e.label.x, y: e.label.y, width: e.label.width, height: e.label.height } : undefined; }
@@ -622,8 +644,8 @@
     });
     var rbo = root.businessObject;
     return {
-      root: clean({ id: root.id, type: short(rbo.$type), name: rbo.name, platform: c7 ? 'camunda7' : 'camunda8', process: rbo.$type === 'bpmn:Process' ? processInfo(c7, rbo) : undefined }),
-      nodes: nodes, edges: edges,
+      root: clean({ id: plane || root.id, type: short(rbo.$type), name: rbo.name, platform: c7 ? 'camunda7' : 'camunda8', process: rbo.$type === 'bpmn:Process' ? processInfo(c7, rbo) : plane ? processInfo(c7, enclosingProcess(rbo)) : undefined, plane: plane, planeName: plane ? rbo.name : undefined }),
+      nodes: nodes, edges: edges, planes: plane ? undefined : subPlanes(inj),
     };
   }
 
@@ -632,7 +654,7 @@
     var root = rootOf(inj), area = lane || container;
     var kids = shapesIn(container).filter(function (k) { return !isA(k, 'bpmn:Lane') && !isA(k, 'bpmn:Participant') && (!lane || centerIn(k, lane)); });
     var b = box(kids);
-    if (container === root) return { x: b ? b.x + b.width + 80 + shape.width / 2 : 240, y: b ? kids[0].y + kids[0].height / 2 : 200 };
+    if (container === root || !container.parent) return { x: b ? b.x + b.width + 80 + shape.width / 2 : 240, y: b ? kids[0].y + kids[0].height / 2 : 200 };
     return { x: b ? b.x + b.width + 80 + shape.width / 2 : area.x + 110 + shape.width / 2, y: area.y + area.height / 2 };
   }
   function resolveParent(inj, p) {
@@ -640,7 +662,7 @@
     if (p.parent) {
       var c = container(inj, p.parent), lane = null;
       if (isA(c, 'bpmn:Lane')) { lane = c; while (isA(c, 'bpmn:Lane')) c = c.parent; }
-      return { container: c, lane: lane, explicit: true };
+      return { container: inner(inj, c), lane: lane, explicit: true };
     }
     if (p.after) return { container: el(inj, p.after).parent };
     if (isA(root, 'bpmn:Collaboration')) {
@@ -766,8 +788,40 @@
     delete q.type; delete q.newId;
     if (p.type === 'boundaryEvent') delete q.interrupting;
     applyUpdate(inj, created, q);
-    try { inj.get('canvas').scrollToElement(created); } catch (e) { /* egal */ }
+    try { if (topOf(created) === inj.get('canvas').getRootElement()) inj.get('canvas').scrollToElement(created); } catch (e) { /* egal */ }
     return assign({ id: created.id }, extra);
+  }
+
+  // SVG einer Ebene (plane = ID eines zugeklappten Teilprozesses), optional auf einen Ausschnitt zugeschnitten
+  // (region = {x,y,width,height} oder ids = Elemente, um die herum ausgeschnitten wird).
+  function svgOf(inj, p) {
+    var canvas = inj.get('canvas'), before = canvas.getRootElement(), target = p.plane ? planeOf(inj, el(inj, p.plane)) : rootOf(inj);
+    if (!target) return Promise.reject(new Error(p.plane + ' ist kein zugeklappter Teilprozess mit eigener Ebene.'));
+    var crop = p.region;
+    if (!crop && p.ids && p.ids.length) {
+      var parts = [];
+      p.ids.forEach(function (id) {
+        var e = el(inj, id);
+        if (e.waypoints) e.waypoints.forEach(function (q) { parts.push({ x: q.x, y: q.y, width: 0, height: 0 }); });
+        else parts.push(e);
+        if (e.label) parts.push(e.label);
+      });
+      var b = box(parts), m = p.margin !== undefined ? p.margin : 60;
+      crop = { x: b.x - m, y: b.y - m, width: b.width + 2 * m, height: b.height + 2 * m };
+    }
+    if (target !== before) canvas.setRootElement(target);
+    return inj.get('bpmnjs').saveSVG().then(function (r) {
+      if (target !== before) canvas.setRootElement(before);
+      var svg = r.svg;
+      if (crop) {
+        var vb = Math.round(crop.x) + ' ' + Math.round(crop.y) + ' ' + Math.round(crop.width) + ' ' + Math.round(crop.height);
+        svg = svg.replace(/<svg([^>]*)>/, function (all, attrs) {
+          attrs = attrs.replace(/\s(width|height|viewBox)="[^"]*"/g, '');
+          return '<svg' + attrs + ' width="' + Math.round(crop.width) + '" height="' + Math.round(crop.height) + '" viewBox="' + vb + '">';
+        });
+      }
+      return svg;
+    }, function (err) { if (target !== before) canvas.setRootElement(before); throw err; });
   }
 
   function rasterize(svg, max) {
@@ -797,7 +851,7 @@
       };
     },
 
-    graph: function () { return graph(need()); },
+    graph: function (p) { return graph(need(), p); },
 
     addElement: function (p) { return addElement(need(), p); },
 
@@ -836,7 +890,7 @@
         var d = p.x !== undefined || p.y !== undefined
           ? { x: p.x !== undefined ? p.x - e.x : 0, y: p.y !== undefined ? p.y - e.y : 0 }
           : { x: p.dx || 0, y: p.dy || 0 };
-        modeling.moveElements(list, d, p.parent ? container(inj, p.parent) : undefined);
+        modeling.moveElements(list, d, p.parent ? inner(inj, container(inj, p.parent)) : undefined);
       } else if (p.action === 'resize') {
         modeling.resizeShape(e, { x: p.x !== undefined ? p.x : e.x, y: p.y !== undefined ? p.y : e.y, width: p.width || e.width, height: p.height || e.height });
       } else if (p.action === 'waypoints') {
@@ -862,11 +916,17 @@
     },
 
     screenshot: function (p) {
-      return need().get('bpmnjs').saveSVG().then(function (r) { return rasterize(r.svg, p.maxSize || 2000); });
+      return svgOf(need(), p).then(function (svg) { return rasterize(svg, p.maxSize || 2000); });
     },
 
-    svg: function () {
-      return need().get('bpmnjs').saveSVG().then(function (r) { return { svg: r.svg }; });
+    svg: function (p) {
+      return svgOf(need(), p || {}).then(function (svg) { return { svg: svg }; });
+    },
+
+    planes: function () { return subPlanes(need()); },
+
+    xml: function () {
+      return need().get('bpmnjs').saveXML({ format: true }).then(function (r) { return { xml: r.xml }; });
     },
 
     batch: function (p) {

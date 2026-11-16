@@ -197,10 +197,12 @@ export const DEFAULT_PLATFORM = PLATFORMS.includes(process.env.BPMN_MCP_PLATFORM
  * Camunda 7: camunda-Namespace, executionPlatform "Camunda Platform", historyTimeToLive (ab 7.20 Pflicht beim Deployment).
  * executable: false erzeugt ein rein fachliches Modell (strategisch/operativ), das die Engine nicht deployt.
  */
-export function emptyDiagram(processId, name, { platform = DEFAULT_PLATFORM, executable = true } = {}) {
+export const DEFAULT_VERSION = { camunda7: process.env.BPMN_MCP_C7_VERSION || '7.23.0', camunda8: process.env.BPMN_MCP_C8_VERSION || '8.8.0' };
+export function emptyDiagram(processId, name, { platform = DEFAULT_PLATFORM, executable = true, version } = {}) {
   const c7 = platform === 'camunda7';
   const ns = c7 ? 'xmlns:camunda="http://camunda.org/schema/1.0/bpmn"' : 'xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"';
-  const exec = c7 ? 'modeler:executionPlatform="Camunda Platform" modeler:executionPlatformVersion="7.23.0"' : 'modeler:executionPlatform="Camunda Cloud" modeler:executionPlatformVersion="8.8.0"';
+  const v = esc(version || DEFAULT_VERSION[platform]);
+  const exec = c7 ? `modeler:executionPlatform="Camunda Platform" modeler:executionPlatformVersion="${v}"` : `modeler:executionPlatform="Camunda Cloud" modeler:executionPlatformVersion="${v}"`;
   const ttl = c7 && executable ? ' camunda:historyTimeToLive="180"' : '';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ${ns} xmlns:modeler="http://camunda.org/schema/modeler/1.0" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn" exporter="bpmn-mcp" ${exec}>

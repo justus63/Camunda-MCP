@@ -1,6 +1,6 @@
 # bpmn-mcp
 
-Ein MCP-Server, mit dem Claude BPMN-Diagramme für den **Camunda Modeler** (Camunda 8 und Camunda 7) zeichnen und bearbeiten kann – und dazu UML-Klassen- und Zustandsdiagramme (Domänenmodell, Objektlebenszyklus) erzeugt.
+Ein MCP-Server, mit dem Claude BPMN-Diagramme für den **Camunda Modeler** (Camunda 8 und Camunda 7) zeichnen und bearbeiten kann – und dazu UML-Klassen- und Zustandsdiagramme (Domänenmodell, Objektlebenszyklus) erzeugt. Für Camunda 7 kann Claude die Modelle außerdem auf einer laufenden Process Engine deployen und Testläufe durchspielen (Aufgaben erledigen, Timer auslösen, Nachrichten senden, Instanzen ansehen).
 
 Es gibt zwei Arbeitsweisen mit demselben Funktionsumfang, die sich kombinieren lassen:
 
@@ -16,7 +16,7 @@ Es gibt zwei Arbeitsweisen mit demselben Funktionsumfang, die sich kombinieren l
 - **Google Chrome**, Chromium oder Microsoft Edge für den Datei-Modus. Der Server findet den Browser an den üblichen Orten; sonst die Umgebungsvariable `CHROME_PATH` auf die Programmdatei setzen. Der Browser läuft unsichtbar im Hintergrund und wird nach 10 Minuten ohne Aufruf beendet.
 - Ein **MCP-fähiger Client**, zum Beispiel Claude Code oder Claude Desktop.
 - Betriebssystem: getestet auf **macOS**. Linux und Windows sollten funktionieren, das Installationsskript ist aber nur für macOS (siehe Schritt 3 für die manuelle Installation).
-- **Kein Camunda-Cluster nötig.** Der Server arbeitet nur mit dem Modeler und mit Dateien.
+- **Kein Camunda-Cluster nötig** für Modellieren, Prüfen und Exportieren. Nur die `engine_*`-Tools brauchen eine laufende Camunda-7-Engine mit REST-API (z. B. eine Spring-Boot-Anwendung mit `camunda-bpm-spring-boot-starter-rest`).
 
 ## Einrichtung
 
@@ -105,7 +105,7 @@ Für den Datei-Modus:
 | Tool | Zweck |
 |---|---|
 | `live_status` | Verbindung und aktiven Tab prüfen (meldet auch ein veraltetes Plugin) |
-| `live_describe` | Elemente und Verbindungen mit IDs, Typ, Pool/Lane, Event-Typ; mit `geometry: true` auch Positionen |
+| `live_describe` | Elemente und Verbindungen mit IDs, Typ, Pool/Lane, Event-Typ, auch den Inhalt zugeklappter Teilprozesse (`plane`); mit `geometry: true` auch Positionen, mit `ids`/`region` nur einen Teil |
 | `live_add_element` | Element anlegen (siehe Elementtypen), optional verbunden (`after`), in Pool/Lane/Teilprozess (`parent`), angeheftet (`attachTo`) |
 | `live_connect` | Sequenzfluss, Nachrichtenfluss (zwischen Pools) oder Assoziation; Bedingung, Standardfluss |
 | `live_update_element` | Name, Typ, Event-Definition, Job-Typ, Bedingung, Schleifen-/Multi-Instanz-Markierung, Farbe, Dokumentation, Camunda-8-Eigenschaften |
@@ -113,16 +113,16 @@ Für den Datei-Modus:
 | `live_arrange` | wie mit der Maus: verschieben (auch in andere Lane), Größe, Wegpunkte, Beschriftung, ausrichten, verteilen |
 | `live_batch` | viele Änderungen in einem Aufruf; mit `layout: true` danach automatisch anordnen und prüfen |
 | `live_layout` | Diagramm nach den Modellierungskonventionen anordnen (ein Undo-Schritt); `only: "messageFlows"` verlegt nur die Nachrichtenflüsse neu, `poolOrder` legt die Pool-Reihenfolge fest |
-| `live_check` | Prüfung gegen die Konventionen: Darstellung, Benennung, Struktur, Nachrichtenflüsse, mögliche Deadlocks, Pflichtangaben der Plattform; mit `level` zusätzlich die Regeln der Modellebene |
-| `live_export` | aktives Diagramm als PDF, SVG oder PNG speichern |
-| `live_screenshot` | Bild des Diagramms, damit Claude das Ergebnis selbst ansehen kann |
+| `live_check` | Prüfung gegen die Konventionen: Darstellung, Benennung, Struktur, Nachrichtenflüsse, mögliche Deadlocks, Pflichtangaben der Plattform; mit `level` zusätzlich die Regeln der Modellebene; dazu bpmnlint mit den Regeln des Camunda Modelers (`lint`) |
+| `live_export` | aktives Diagramm als PDF, SVG oder PNG speichern; `plane` = eine Drill-down-Ebene, `includePlanes: true` = alle Ebenen als eigene Dateien |
+| `live_screenshot` | Bild des Diagramms, damit Claude das Ergebnis selbst ansehen kann; `ids`/`region` = vergrößerter Ausschnitt, `plane` = Drill-down-Ebene |
 | `live_undo`, `live_redo`, `live_save` | rückgängig, wiederherstellen, speichern |
 
 **Datei-Modus** (Parameter `file` = absoluter Pfad, jede Änderung wird sofort gespeichert):
 
 | Tool | Zweck | entspricht |
 |---|---|---|
-| `create_diagram` | neue Datei anlegen (`platform: camunda8` oder `camunda7`); mit `operations` wird das ganze Diagramm im selben Aufruf gebaut, angeordnet und geprüft | – |
+| `create_diagram` | neue Datei anlegen (`platform: camunda8` oder `camunda7`, optional `platformVersion` wie `"7.20.0"`); mit `operations` wird das ganze Diagramm im selben Aufruf gebaut, angeordnet und geprüft | – |
 | `describe_diagram` | wie `live_describe` | `live_describe` |
 | `add_element`, `connect`, `update_element`, `remove_element` | dieselben Parameter wie im Live-Modus | `live_add_element` … |
 | `batch` | viele Änderungen in einem Aufruf; **alles oder nichts**: bei einem Fehler bleibt die Datei unverändert | `live_batch` |
@@ -149,6 +149,31 @@ Technisch öffnet der Datei-Modus die Datei in einem unsichtbaren bpmn-js und f�
 { "type": "conditional", "value": "= x > 5" }
 { "type": "terminate" }   { "type": "compensate" }   { "type": "none" }
 ```
+
+**Zugeklappte Teilprozesse** (`expanded: false`) haben wie im Modeler eine eigene Drill-down-Ebene. Elemente mit `parent` = Teilprozess landen in dieser Ebene; Layout und Prüfung behandeln jede Ebene einzeln (Meldungen sind mit `[Ebene „…“]` markiert), `describe` kennzeichnet sie mit `plane`.
+
+**Prozess-Eigenschaften** (`historyTimeToLive`, `versionTag`, `candidateStarterGroups`, `isExecutable`) setzt `update` mit der ID des Prozesses oder des Pools.
+
+**Camunda 7 Process Engine** (REST-API, Standard `http://localhost:8080/engine-rest`, änderbar mit der Umgebungsvariable `CAMUNDA_URL` oder je Aufruf mit `engineUrl`; Basic Auth über `CAMUNDA_USER`/`CAMUNDA_PASSWORD`):
+
+| Tool | Zweck |
+|---|---|
+| `engine_status` | Engine erreichbar? Deployte Prozesse und DMN-Tabellen, laufende Instanzen, Incidents |
+| `engine_deploy` | `.bpmn`, `.dmn`, `.form`, `.html` deployen (Standard: nur Geänderte) |
+| `engine_start_instance` | Instanz mit Variablen und Business Key starten; zeigt, wo sie danach wartet |
+| `engine_tasks` | offene User Tasks je Instanz, Bearbeiter, Gruppe oder Name, optional mit Formularfeldern |
+| `engine_complete_task` | Aufgabe per ID oder per Business Key + Name erledigen, optional als bestimmter Benutzer (claim) |
+| `engine_execute_jobs` | Timer und asynchrone Jobs einer Instanz sofort ausführen (Fristen im Testlauf überspringen) |
+| `engine_correlate_message` | Nachricht an wartende Ereignisse senden oder Instanz per Nachricht starten |
+| `engine_instance` | Zustand einer (auch beendeten) Instanz: Warteposition, Aufgaben, Timer, External Tasks, Incidents, Variablen, Verlauf |
+| `engine_incidents` | Incidents mit Fehlermeldung und Stacktrace-Anfang; `retry: true` setzt die Retries wieder auf 1 |
+| `engine_rest` | beliebiger REST-Aufruf für alles andere |
+
+Variablen werden als `{ name: wert }` übergeben; der Typ ergibt sich aus dem Wert (`true` → Boolean, `5` → Long, `1.5` → Double, Text → String, Objekt → Json) oder wird explizit angegeben (`{ "value": "2026-12-01T00:00:00.000+0100", "type": "Date" }`).
+
+Ein Testlauf sieht dann zum Beispiel so aus:
+
+> Deploy `dienstreise.bpmn` und `genehmigungsstellen.dmn`, starte eine Instanz für mara nach Berlin (320 €), lass henrik das Budget und ole die fachliche Prüfung genehmigen, löse die Timer aus und zeig mir den Verlauf.
 
 **UML** (unabhängig vom Modeler):
 
@@ -272,18 +297,19 @@ Siehe Hinweis in Schritt 1: Es muss eine `package.json` im Projektordner liegen.
 
 ## Grenzen
 
+- Die `engine_*`-Tools sprechen nur die Camunda-7-REST-API an (keine Camunda-8-/Zeebe-Cluster).
 - Camunda 7 und 8 lassen sich nicht in einer Datei mischen. DMN-Tabellen, Formulare (`.form`, HTML) und Java-Klassen legt der Server nicht an; er trägt nur die Verweise darauf ein.
 - UML: Klassen- und Zustandsdiagramme. Die `.drawio`-Datei wurde nicht in diagrams.net geöffnet geprüft, sondern nur auf ihren Aufbau; maßgeblich für das Aussehen sind SVG/PDF/PNG.
 - Die Deadlock-Prüfung ist eine Heuristik über den nächsten gemeinsamen Verzweigungspunkt. Sie ersetzt kein Durchspielen des Tokenflusses.
 - Datei-Modus: Undo/Redo gilt nur für Änderungen der laufenden Sitzung. Wird die Datei zwischendurch außerhalb geändert, beginnt der Verlauf neu.
 - Datei-Modus: Der erste Aufruf dauert ein bis zwei Sekunden, weil der Browser startet.
-- `live_layout` ordnet ohne `only: "messageFlows"` immer das ganze Diagramm neu an; einzelne Elemente lassen sich nicht festhalten. Elemente in aufgeklappten Teilprozessen werden innerhalb des Teilprozesses angeordnet und nicht spaltengenau an Nachrichtenpartnern ausgerichtet. Verschachtelte Lanes (Lane in Lane) und zugeklappte Teilprozesse (eigene Zeichenebene) werden nicht angeordnet.
-- Nicht enthalten: Kopieren/Einfügen, Deployment/Ausführung, DMN- und Formular-Editor.
+- `live_layout` ordnet ohne `only: "messageFlows"` immer das ganze Diagramm neu an; einzelne Elemente lassen sich nicht festhalten. Elemente in aufgeklappten Teilprozessen werden innerhalb des Teilprozesses angeordnet und nicht spaltengenau an Nachrichtenpartnern ausgerichtet. Verschachtelte Lanes (Lane in Lane) werden nicht angeordnet. Zugeklappte Teilprozesse werden in ihrer eigenen Drill-down-Ebene angeordnet.
+- Nicht enthalten: Kopieren/Einfügen, DMN- und Formular-Editor, Deployment auf Camunda 8.
 - Die Plugin-Schnittstelle des Modelers ist laut Camunda-Doku **nicht stabil**. Nach einem Modeler-Update kann das Plugin angepasst werden müssen.
 
 ## Tests
 
-- `npm test`: Datei-Modus (`test.js`, `test/file-full.mjs`), Live-Modus gegen ein echtes bpmn-js in Headless-Chrome, Camunda 7 (`test/c7-direct.mjs`, `test/c7-file.mjs`), Kollaborations-Layout (`test/collab-direct.mjs`) und UML (`test/uml.mjs`). Braucht Google Chrome (anderer Pfad über `CHROME_PATH`), aber keinen Camunda Modeler.
+- `npm test`: Datei-Modus (`test.js`, `test/file-full.mjs`), Live-Modus gegen ein echtes bpmn-js in Headless-Chrome, Camunda 7 (`test/c7-direct.mjs`, `test/c7-file.mjs`), Kollaborations-Layout (`test/collab-direct.mjs`), UML (`test/uml.mjs`), Drill-down-Ebenen, bpmnlint und weitere Verbesserungen aus dem Dienstreise-Projekt (`test/projekt-fixes.mjs`) sowie die Engine-Tools gegen eine nachgebildete REST-API (`test/engine-mock.mjs`). Braucht Google Chrome (anderer Pfad über `CHROME_PATH`), aber keinen Camunda Modeler.
 - Die Tests mit `[ausgabe-präfix]` bzw. `[ausgabe-ordner]` als Argument schreiben ihre Ergebnisse (BPMN, PNG, PDF) zum Ansehen dorthin.
 - `node test/layout-file.mjs ein.bpmn aus.bpmn aus.png`: eine Datei neu anordnen, prüfen und als Bild rendern.
 - `node test-live.js <geöffnete.bpmn>`: Live-Modus im echten Modeler. **Achtung:** Der Test ändert und speichert diese Datei. Nimm also eine Kopie.
@@ -295,6 +321,8 @@ server.js            MCP-Server (Live-Tools, Datei-Tools, WebSocket-Brücke)
 headless.js          Datei-Modus: unsichtbares bpmn-js mit dem Plugin-Code, Undo-Verlauf
 layout.js            Layout-Engine nach den Modellierungskonventionen
 check.js             Prüfung gegen die Konventionen, Modellebenen, Plattform-Pflichtangaben
+lint.js              bpmnlint mit den Regeln des Camunda Modelers (camunda-compat je Plattform/Version)
+engine.js            Camunda-7-REST-Client für die engine_*-Tools
 uml.js               UML-Klassen- und Zustandsdiagramme (SVG und draw.io-XML)
 model.js             Brücke zwischen bpmn-moddle und Layout/Prüfung (für test/layout-file.mjs)
 plugin/index.js      Plugin-Manifest für den Modeler

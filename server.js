@@ -10,13 +10,15 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { WebSocketServer } from 'ws';
 import { computeLayout } from './layout.js';
-import { checkDiagram, formatCheck, formatInventory, LEVELS } from './check.js';
+import { checkAll, formatCheck, formatInventory, LEVELS } from './check.js';
 import { withFile, undoFile, emptyDiagram, closeHeadless, renderSvg, PLATFORMS, DEFAULT_PLATFORM } from './headless.js';
 import { classDiagram, stateDiagram } from './uml.js';
+import { lintXml, formatLint } from './lint.js';
+import * as engine from './engine.js';
 
 // ---------- Live-Brücke zum Camunda Modeler (Plugin verbindet sich hierher) ----------
 const BRIDGE_PORT = Number(process.env.BPMN_MCP_PORT ?? 17877);
-const PLUGIN_VERSION = 5;
+const PLUGIN_VERSION = 6;
 let modelerSocket = null;
 let nextId = 1;
 const pending = new Map();
@@ -243,10 +245,21 @@ const OPERATIONS = z
   .array(z.discriminatedUnion('op', [OP('add', ADD), OP('connect', CONNECT), OP('update', UPDATE), OP('remove', REMOVE), OP('arrange', ARRANGE)]))
   .describe('Jeder Eintrag hat "op" (add | connect | update | remove | arrange) und die Parameter des gleichnamigen Tools');
 const GEOMETRY = z.boolean().optional().describe('true: auch Positionen und Wegpunkte ausgeben');
+const DESCRIBE = {
+  geometry: GEOMETRY,
+  ids: z.array(z.string()).optional().describe('Nur diese Elemente/Verbindungen ausgeben (spart bei großen Diagrammen Tokens)'),
+  region: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional().describe('Nur Elemente/Verbindungen, die diesen Bereich berühren (Koordinaten wie bei geometry)'),
+};
 const MAX_SIZE = z.number().optional().describe('Maximale Kantenlänge in Pixeln (Standard 2000)');
+const VIEW = {
+  maxSize: MAX_SIZE,
+  plane: z.string().optional().describe('ID eines zugeklappten Teilprozesses: dessen Drill-down-Ebene zeigen'),
+  ids: z.array(z.string()).optional().describe('Ausschnitt: nur der Bereich um diese Elemente (Zoom, für große Diagramme)'),
+  region: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional().describe('Ausschnitt in Diagrammkoordinaten'),
+};
 
 // ---------- Gemeinsame Logik; exec(method, params) führt einen Plugin-Befehl aus (live oder headless) ----------
-const LAYOUT_RULES = /^(linie-durch-element|ueberlappung|kreuzung|linien-uebereinander|beschriftung-verdeckt|beschriftung-auf-linie|beschriftungen-ueberlappen|schraege-linie)$/;
+const LAYOUT_RULES = /^(mini-stufe|linie-durch-element|ueberlappung|kreuzung|linien-uebereinander|beschriftung-verdeckt|beschriftung-auf-linie|beschriftungen-ueberlappen|schraege-linie)$/;
 const layoutOnly = (res) => ({ ...res, problems: res.problems.filter((p) => LAYOUT_RULES.test(p.rule)) });
 
 const ok = (text) => ({ content: [{ type: 'text', text }] });
@@ -254,8 +267,29 @@ const fail = (text) => ({ isError: true, content: [{ type: 'text', text }] });
 const json = (v) => JSON.stringify(v, null, 2);
 
 // Kompakte Ausgabe: gültiges JSON, aber nur eine Zeile je Element (spart bei großen Diagrammen viele Tokens).
-async function describe(exec, geometry) {
-  const g = await exec('graph');
+// Hauptebene + Drill-down-Ebenen der zugeklappten Teilprozesse (deren Elemente haben eigene Koordinaten).
+async function allGraphs(exec) {
+  const main = await exec('graph');
+  const subs = [];
+  for (const plane of main.planes ?? []) subs.push(await exec('graph', { plane }));
+  return [main, ...subs];
+}
+const touches = (o, r) => {
+  const pts = o.waypoints ?? (o.x !== undefined ? [{ x: o.x, y: o.y }, { x: o.x + o.width, y: o.y + o.height }] : []);
+  if (!pts.length) return false;
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  return Math.min(...xs) <= r.x + r.width && Math.max(...xs) >= r.x && Math.min(...ys) <= r.y + r.height && Math.max(...ys) >= r.y;
+};
+async function describe(exec, { geometry, ids, region } = {}) {
+  const [main, ...subs] = await allGraphs(exec);
+  const g = { root: main.root, nodes: [...main.nodes], edges: [...main.edges] };
+  for (const s of subs) {
+    const plane = s.root.plane;
+    g.nodes.push(...s.nodes.map((n) => ({ ...n, parent: n.parent ?? plane, plane })));
+    g.edges.push(...s.edges.map((e) => ({ ...e, plane })));
+  }
+  if (ids?.length) { const set = new Set(ids); g.nodes = g.nodes.filter((n) => set.has(n.id)); g.edges = g.edges.filter((e) => set.has(e.id)); }
+  if (region) { g.nodes = g.nodes.filter((n) => !n.plane && touches(n, region)); g.edges = g.edges.filter((e) => !e.plane && touches(e, region)); geometry = true; }
   const strip = ({ x, y, width, height, label, waypoints, members, ...rest }) => (geometry ? { ...rest, x, y, width, height, waypoints } : rest);
   const lines = (list) => (list.length ? `[\n${list.map((e) => JSON.stringify(e)).join(',\n')}\n]` : '[]');
   return `{"root":${JSON.stringify(g.root)},\n"elements":${lines(g.nodes.map(strip))},\n"flows":${lines(g.edges.map(({ source, target, ...e }) => strip({ ...e, from: source, to: target })))}}`;
@@ -269,9 +303,16 @@ const LAYOUT_OPTS = {
 const layoutOpts = ({ only, poolOrder, align }) => ({ only: only === 'messageFlows' ? only : undefined, poolOrder, align });
 
 async function runLayout(exec, undoHint = '(ein Undo-Schritt)', opts = {}) {
-  const result = await exec('applyLayout', computeLayout(await exec('graph'), opts));
-  const res = layoutOnly(checkDiagram(await exec('graph')));
-  const what = opts.only === 'messageFlows' ? `Nachrichtenflüsse neu verlegt: ${result.edges}` : `Layout angewendet: ${result.shapes} Elemente, ${result.edges} Verbindungen`;
+  const [main, ...subs] = await allGraphs(exec);
+  const layout = computeLayout(main, opts);
+  // Drill-down-Ebenen zugeklappter Teilprozesse eigenständig anordnen (eigene Koordinaten), im selben Undo-Schritt.
+  if (opts.only !== 'messageFlows') for (const s of subs) {
+    const l = computeLayout(s);
+    for (const k of ['shapes', 'labels', 'edges']) Object.assign(layout[k], l[k]);
+  }
+  const result = await exec('applyLayout', layout);
+  const res = layoutOnly(checkAll(await allGraphs(exec)));
+  const what = opts.only === 'messageFlows' ? `Nachrichtenflüsse neu verlegt: ${result.edges}` : `Layout angewendet: ${result.shapes} Elemente, ${result.edges} Verbindungen${subs.length ? ` (inkl. ${subs.length} Drill-down-Ebene(n))` : ''}`;
   return `${what} ${undoHint}.\n${formatCheck(res)}`;
 }
 
@@ -279,13 +320,25 @@ const LEVEL = z
   .enum(LEVELS)
   .optional()
   .describe('Modellebene: strategisch (grob, Happy Case, max. 10 Schritte), operativ (Kollaboration, Nachrichten- und Datenfluss, keine Deadlocks), technisch (ausführbar auf der Plattform). Ohne Angabe: allgemeine Konventionen + technische Pflichtangaben der ausführbaren Prozesse');
-async function check(exec, level) {
-  const res = checkDiagram(await exec('graph'), { level });
-  return `${level ? `Ebene: ${level}\n` : ''}${formatCheck(res)}\n${formatInventory(res.inventory)}`;
+const LINT = z
+  .boolean()
+  .optional()
+  .describe('bpmnlint mit den Regeln des Camunda Modelers (camunda-compat für Plattform/Version aus dem Dateikopf + bpmnlint:recommended). Standard: an, außer bei level strategisch/operativ');
+async function check(exec, level, lint) {
+  const res = checkAll(await allGraphs(exec), { level });
+  let text = `${level ? `Ebene: ${level}\n` : ''}${formatCheck(res)}\n${formatInventory(res.inventory)}`;
+  if (lint ?? !/^(strategisch|operativ)$/.test(level ?? '')) {
+    try {
+      text += `\n${formatLint(await lintXml((await exec('xml')).xml))}`;
+    } catch (e) {
+      text += `\nbpmnlint nicht ausgeführt: ${e.message}`;
+    }
+  }
+  return text;
 }
 
-async function screenshot(exec, maxSize) {
-  const r = await exec('screenshot', { maxSize });
+async function screenshot(exec, { maxSize, plane, ids, region } = {}) {
+  const r = await exec('screenshot', { maxSize, plane, ids, region });
   return { content: [{ type: 'image', data: r.png, mimeType: 'image/png' }, { type: 'text', text: `${r.width}×${r.height} px` }] };
 }
 
@@ -298,6 +351,18 @@ async function exportDiagram(svg, format, output) {
   else await fs.writeFile(output, (await renderSvg(svg, format)).data);
   return `Exportiert: ${output}`;
 }
+const INCLUDE_PLANES = z.boolean().optional().describe('true: zusätzlich jede Drill-down-Ebene zugeklappter Teilprozesse als eigene Datei <Ausgabe>_<Teilprozess-ID>.<Format>');
+async function collectSvgs(exec, { plane, includePlanes }) {
+  const list = [{ plane, svg: (await exec('svg', { plane })).svg }];
+  if (includePlanes && !plane) for (const p of await exec('planes')) list.push({ plane: p, svg: (await exec('svg', { plane: p })).svg });
+  return list;
+}
+async function writeSvgs(svgs, format, output) {
+  const lines = [];
+  for (const [i, s] of svgs.entries()) lines.push(await exportDiagram(s.svg, format, i ? output.replace(/(\.[^./\\]+)$/, `_${s.plane}$1`) : output));
+  return lines.join('\n');
+}
+const exportAll = async (exec, format, output, opts) => writeSvgs(await collectSvgs(exec, opts), format, output);
 const withExt = (file, ext) => file.replace(/\.[^./\\]+$/, '') + '.' + ext;
 
 const INSTRUCTIONS = `BPMN-Modellierung für den Camunda Modeler (Camunda 8 und Camunda 7) und UML-Diagramme. Zwei BPMN-Modi mit denselben Möglichkeiten:
@@ -319,9 +384,12 @@ Modellierungskonventionen (verbindlich):
 - Symmetrisch modellieren: jede Verzweigung bekommt ein eigenes zusammenführendes Gateway gleichen Typs; ein Gateway nie gleichzeitig zusammenführen und verzweigen lassen; explizite Gateways statt mehrerer Ein-/Ausgänge an Aufgaben.
 - Gleiche Aufgabengröße (Standard 100x80 nicht verändern).
 - Zwischenereignisse brauchen einen Typ (eventDefinition); nach einem ereignisbasierten Gateway folgen nur eintretende Ereignisse, ohne Bedingungen und ohne weitere Eingänge.
+Zugeklappte Teilprozesse (expanded: false) haben eine eigene Drill-down-Ebene wie im Modeler: Elemente mit parent = Teilprozess landen dort, Layout und Prüfung behandeln jede Ebene einzeln; screenshot/export mit plane = Teilprozess-ID zeigen sie, export mit includePlanes: true schreibt alle Ebenen. Große Diagramme: screenshot mit ids/region für einen vergrößerten Ausschnitt, describe mit ids/region statt alles.
+Prozess-Eigenschaften (historyTimeToLive, versionTag, candidateStarterGroups, isExecutable): update mit id = Prozess-ID oder Pool-ID. create_diagram platformVersion legt die Ziel-Engine fest (z. B. "7.20.0"); check_diagram führt zusätzlich bpmnlint mit den Regeln des Camunda Modelers aus.
+Camunda 7 Engine (engine_*, REST, Standard http://localhost:8080/engine-rest): engine_status -> engine_deploy -> engine_start_instance -> engine_tasks / engine_complete_task (mit user) -> engine_execute_jobs (Timer sofort auslösen) / engine_correlate_message -> engine_instance (Zustand, Variablen, Verlauf) und engine_incidents (mit retry). engine_rest für alles andere.
 UML: uml_class_diagram (Domänenmodell: Klassen mit fachlichen Attributen, benannte Assoziationen mit Kardinalitäten, keine Methoden) und uml_state_diagram (Objektlebenszyklus) erzeugen aus einer Beschreibung .drawio (XML), .svg, .pdf und .png in einem Aufruf.`;
 
-const server = new McpServer({ name: 'bpmn-modeler-mcp', version: '0.5.0' }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: 'bpmn-modeler-mcp', version: '0.6.0' }, { instructions: INSTRUCTIONS });
 
 // ---------- Live-Tools: bearbeiten das im Modeler geöffnete Diagramm (mit Undo/Redo) ----------
 const liveTool = (name, description, inputSchema, run) =>
@@ -341,9 +409,9 @@ liveTool('live_status', 'Prüft, ob der Camunda Modeler verbunden ist und welche
 });
 liveTool(
   'live_describe',
-  'Listet alle Elemente und Verbindungen des im Modeler aktiven Diagramms mit IDs, Typ, Pool/Lane, Event-Typ usw. Vor Änderungen aufrufen.',
-  { geometry: GEOMETRY },
-  ({ geometry }) => describe(callModeler, geometry),
+  'Listet alle Elemente und Verbindungen des im Modeler aktiven Diagramms mit IDs, Typ, Pool/Lane, Event-Typ usw. (auch den Inhalt zugeklappter Teilprozesse, markiert mit "plane"). Vor Änderungen aufrufen.',
+  DESCRIBE,
+  (args) => describe(callModeler, args),
 );
 liveTool(
   'live_add_element',
@@ -374,17 +442,20 @@ liveTool(
 liveTool(
   'live_check',
   'Prüft das aktive Diagramm: Darstellung (Linien durch Elemente, Kreuzungen, Überlappungen), Benennung, symmetrische Struktur, Nachrichtenflüsse, mögliche Deadlocks, Pflichtangaben der Plattform; mit level zusätzlich die Regeln der Modellebene. Listet die verwendeten Konstrukte auf.',
-  { level: LEVEL },
-  ({ level }) => check(callModeler, level),
+  { level: LEVEL, lint: LINT },
+  ({ level, lint }) => check(callModeler, level, lint),
 );
 liveTool(
   'live_export',
   'Exportiert das aktive Diagramm als PDF, SVG oder PNG (für die Abgabe).',
-  { format: FORMAT, output: z.string().describe('Absoluter Pfad der Ausgabedatei') },
-  async ({ format, output }) => exportDiagram((await callModeler('svg')).svg, format, output),
+  { format: FORMAT, output: z.string().describe('Absoluter Pfad der Ausgabedatei'), plane: VIEW.plane, includePlanes: INCLUDE_PLANES },
+  async ({ format, output, plane, includePlanes }) => exportAll(callModeler, format, output, { plane, includePlanes }),
 );
-liveTool('live_screenshot', 'Liefert ein Bild des aktiven Diagramms, um die Darstellung selbst zu beurteilen.', { maxSize: MAX_SIZE }, ({ maxSize }) =>
-  screenshot(callModeler, maxSize),
+liveTool(
+  'live_screenshot',
+  'Liefert ein Bild des aktiven Diagramms, um die Darstellung selbst zu beurteilen. Bei großen Diagrammen mit ids/region einen Ausschnitt vergrößert ansehen; plane zeigt die Ebene eines zugeklappten Teilprozesses.',
+  VIEW,
+  (args) => screenshot(callModeler, args),
 );
 liveTool(
   'live_batch',
@@ -436,15 +507,16 @@ server.registerTool(
       name: z.string().optional().describe('Anzeigename des Prozesses'),
       platform: z.enum(PLATFORMS).default(DEFAULT_PLATFORM).describe('Ausführungsplattform: bestimmt Dateikopf und technische Eigenschaften'),
       executable: z.boolean().default(true).describe('false für rein fachliche Modelle (strategisch/operativ), die nicht deployt werden'),
+      platformVersion: z.string().regex(/^\d+\.\d+(\.\d+)?$/).optional().describe('Version der Ziel-Engine, z. B. "7.20.0" (steuert die Prüfungen im Modeler; Standard 7.23.0 bzw. 8.8.0)'),
       operations: OPERATIONS.optional(),
       poolOrder: LAYOUT_OPTS.poolOrder,
     },
   },
-  async ({ file, processId, name, platform, executable, operations, poolOrder }) => {
+  async ({ file, processId, name, platform, executable, platformVersion, operations, poolOrder }) => {
     try {
       if (!path.isAbsolute(file)) return fail(`"file" muss ein absoluter Pfad sein: ${file}`);
       await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, emptyDiagram(processId, name, { platform, executable }), { encoding: 'utf8', flag: 'wx' });
+      await fs.writeFile(file, emptyDiagram(processId, name, { platform, executable, version: platformVersion }), { encoding: 'utf8', flag: 'wx' });
       if (!operations?.length) return ok(`Diagramm angelegt (${platform}): ${file}`);
       try {
         const text = await withFile(file, async (exec) => `${batchText(await exec('batch', { operations }))}\n${await runLayout(exec, FILE_UNDO, { poolOrder })}`, { mutate: true });
@@ -460,9 +532,9 @@ server.registerTool(
 );
 fileTool(
   'describe_diagram',
-  'Listet alle Elemente und Verbindungen einer BPMN-Datei mit IDs, Typ, Pool/Lane, Event-Typ usw. Vor Änderungen aufrufen.',
-  { geometry: GEOMETRY },
-  (exec, { geometry }) => describe(exec, geometry),
+  'Listet alle Elemente und Verbindungen einer BPMN-Datei mit IDs, Typ, Pool/Lane, Event-Typ usw. (auch den Inhalt zugeklappter Teilprozesse, markiert mit "plane"). Vor Änderungen aufrufen.',
+  DESCRIBE,
+  (exec, args) => describe(exec, args),
 );
 fileTool(
   'add_element',
@@ -518,27 +590,30 @@ fileTool(
 fileTool(
   'check_diagram',
   'Prüft eine BPMN-Datei: Darstellung (Linien durch Elemente, Kreuzungen, Überlappungen), Benennung, Struktur, Nachrichtenflüsse, mögliche Deadlocks, Pflichtangaben der Plattform; mit level zusätzlich die Regeln der Modellebene. Listet die verwendeten Konstrukte auf.',
-  { level: LEVEL },
-  (exec, { level }) => check(exec, level),
+  { level: LEVEL, lint: LINT },
+  (exec, { level, lint }) => check(exec, level, lint),
 );
 server.registerTool(
   'export_diagram',
   {
     description: 'Exportiert eine BPMN-Datei als PDF, SVG oder PNG (für die Abgabe). Standard: gleiche Datei mit anderer Endung.',
-    inputSchema: { file: FILE, format: FORMAT, output: z.string().optional().describe('Absoluter Pfad der Ausgabedatei') },
+    inputSchema: { file: FILE, format: FORMAT, output: z.string().optional().describe('Absoluter Pfad der Ausgabedatei'), plane: VIEW.plane, includePlanes: INCLUDE_PLANES },
   },
-  async ({ file, format, output }) => {
+  async ({ file, format, output, plane, includePlanes }) => {
     try {
       if (!path.isAbsolute(file)) return fail(`"file" muss ein absoluter Pfad sein: ${file}`);
-      const { svg } = await withFile(file, (exec) => exec('svg'));
-      return ok(await exportDiagram(svg, format, output ?? withExt(file, format)));
+      const svgs = await withFile(file, (exec) => collectSvgs(exec, { plane, includePlanes }));
+      return ok(await writeSvgs(svgs, format, output ?? withExt(file, format)));
     } catch (e) {
       return fail(String(e.message ?? e));
     }
   },
 );
-fileTool('screenshot_diagram', 'Liefert ein Bild der BPMN-Datei, um die Darstellung selbst zu beurteilen.', { maxSize: MAX_SIZE }, (exec, { maxSize }) =>
-  screenshot(exec, maxSize),
+fileTool(
+  'screenshot_diagram',
+  'Liefert ein Bild der BPMN-Datei, um die Darstellung selbst zu beurteilen. Bei großen Diagrammen mit ids/region einen Ausschnitt vergrößert ansehen; plane zeigt die Ebene eines zugeklappten Teilprozesses.',
+  VIEW,
+  (exec, args) => screenshot(exec, args),
 );
 for (const redo of [false, true]) {
   server.registerTool(
@@ -630,6 +705,103 @@ umlTool(
     transitions: z.array(z.object({ from: z.string(), to: z.string(), label: z.string().optional().describe('auslösende Aktivität/Ereignis [Bedingung]') })),
   },
   stateDiagram,
+);
+
+// ---------- Camunda 7 Process Engine (REST): deployen, starten, Aufgaben erledigen, Timer auslösen, Zustand ansehen ----------
+const ENGINE_URL = z.string().optional().describe(`Basis-URL der REST-API (Standard: ${engine.DEFAULT_URL}, änderbar über CAMUNDA_URL)`);
+const INSTANCE = {
+  processInstanceId: z.string().optional(),
+  businessKey: z.string().optional().describe('Statt der ID: Business Key der Instanz (die neueste mit diesem Key)'),
+};
+const VARIABLES = z
+  .record(z.string(), z.any())
+  .optional()
+  .describe('Prozessvariablen als { name: wert }; Typ automatisch (true → Boolean, 5 → Long, 1.5 → Double, "x" → String, Objekt → Json) oder explizit { value, type: "Date" | "Integer" | … }');
+const engineTool = (name, description, shape, run) =>
+  server.registerTool(name, { description, inputSchema: { ...shape, engineUrl: ENGINE_URL } }, async ({ engineUrl, ...args }) => {
+    try {
+      return ok(await run(engine.client(engineUrl), args));
+    } catch (e) {
+      return fail(String(e.message ?? e));
+    }
+  });
+engineTool('engine_status', 'Camunda 7: prüft, ob die Engine erreichbar ist, und listet deployte Prozesse und DMN-Entscheidungen (neueste Version) sowie laufende Instanzen und Incidents.', {}, (c) => engine.status(c));
+engineTool(
+  'engine_deploy',
+  'Camunda 7: deployt BPMN-, DMN- und Formular-Dateien (.bpmn, .dmn, .form, .html) über die REST-API. Standard: nur Geänderte (deploy-changed-only). Vorher check_diagram mit level "technisch" ausführen.',
+  {
+    files: z.array(z.string()).min(1).describe('Absolute Pfade der Dateien'),
+    name: z.string().optional().describe('Name des Deployments (Standard: erster Dateiname)'),
+    changedOnly: z.boolean().optional().describe('false: immer neue Versionen anlegen (Standard true)'),
+    tenantId: z.string().optional(),
+  },
+  (c, a) => engine.deploy(c, a),
+);
+engineTool(
+  'engine_start_instance',
+  'Camunda 7: startet eine Prozessinstanz (neueste Version des Keys) mit Variablen und Business Key und zeigt, wo sie danach wartet.',
+  { processDefinitionKey: z.string().describe('ID des Prozesses (process id im BPMN)'), businessKey: z.string().optional(), variables: VARIABLES, tenantId: z.string().optional() },
+  (c, a) => engine.start(c, a),
+);
+engineTool(
+  'engine_tasks',
+  'Camunda 7: listet offene User Tasks – je Instanz (ID oder Business Key), Bearbeiter, Kandidatengruppe oder Name; mit formVariables auch die Formularfelder.',
+  { ...INSTANCE, assignee: z.string().optional(), candidateGroup: z.string().optional(), candidateUser: z.string().optional(), name: z.string().optional().describe('Teil des Aufgabennamens'), formVariables: z.boolean().optional() },
+  (c, a) => engine.tasks(c, a),
+);
+engineTool(
+  'engine_complete_task',
+  'Camunda 7: erledigt eine User Task mit Variablen – per taskId oder per Instanz (ID/Business Key) + Aufgabenname. Mit user wird sie vorher diesem Benutzer zugewiesen (claim), wie in der Tasklist. Zeigt danach, wo die Instanz wartet.',
+  {
+    taskId: z.string().optional(),
+    ...INSTANCE,
+    name: z.string().optional().describe('Aufgabenname (exakt oder Teil davon)'),
+    taskDefinitionKey: z.string().optional().describe('ID der User Task im BPMN'),
+    variables: VARIABLES,
+    user: z.string().optional().describe('Benutzer, der die Aufgabe übernimmt (claim) und erledigt'),
+    submitForm: z.boolean().optional().describe('true: wie das Formular in der Tasklist absenden (submit-form, prüft Generated-Form-Felder)'),
+  },
+  (c, a) => engine.complete(c, a),
+);
+engineTool(
+  'engine_instance',
+  'Camunda 7: Zustand einer Prozessinstanz (ID oder Business Key, auch beendet): wo sie wartet, offene Aufgaben, Timer/Jobs, External Tasks, Incidents, Variablen und Verlauf der durchlaufenen Aktivitäten.',
+  { ...INSTANCE, history: z.boolean().optional().describe('Verlauf ausgeben (Standard true)'), variables: z.boolean().optional().describe('Variablen ausgeben (Standard true)') },
+  (c, { history, variables, ...ref }) => engine.instanceState(c, ref, { history: history ?? true, variables: variables ?? true }),
+);
+engineTool(
+  'engine_execute_jobs',
+  'Camunda 7: führt fällige und noch nicht fällige Jobs einer Instanz sofort aus – z. B. Timer („3 Tage vergangen“) im Testlauf auslösen oder asynchrone Fortsetzungen anstoßen.',
+  { ...INSTANCE, jobId: z.string().optional(), timersOnly: z.boolean().optional().describe('nur Timer-Jobs') },
+  (c, a) => engine.executeJobs(c, a),
+);
+engineTool(
+  'engine_correlate_message',
+  'Camunda 7: sendet eine Nachricht an wartende Nachrichtenereignisse/Receive Tasks oder startet per Nachrichten-Startereignis eine Instanz.',
+  {
+    messageName: z.string(),
+    ...INSTANCE,
+    variables: VARIABLES.describe('Prozessvariablen, die mit der Nachricht gesetzt werden'),
+    correlationKeys: z.record(z.string(), z.any()).optional().describe('Korrelation über Variablenwerte'),
+    all: z.boolean().optional().describe('an alle passenden Empfänger'),
+  },
+  (c, a) => engine.correlate(c, a),
+);
+engineTool(
+  'engine_incidents',
+  'Camunda 7: listet Incidents (fehlgeschlagene Jobs/External Tasks) mit Fehlermeldung und Stacktrace-Anfang; mit retry: true werden die Retries auf 1 gesetzt (nach der Fehlerbehebung).',
+  { ...INSTANCE, retry: z.boolean().optional() },
+  (c, a) => engine.incidents(c, a),
+);
+engineTool(
+  'engine_rest',
+  'Camunda 7: beliebiger Aufruf der REST-API für alles, was die anderen engine_-Tools nicht abdecken (z. B. GET /history/detail?processInstanceId=…, DELETE /process-instance/{id}, POST /decision-definition/key/{key}/evaluate).',
+  {
+    method: z.enum(['GET', 'POST', 'PUT', 'DELETE']).default('GET'),
+    path: z.string().describe('Pfad relativ zur Basis-URL, z. B. "/history/process-instance?finished=true"'),
+    body: z.any().optional().describe('JSON-Body bei POST/PUT'),
+  },
+  (c, a) => engine.rest(c, a),
 );
 
 // Beim Ende der Sitzung auch den Headless-Browser beenden.

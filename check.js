@@ -29,8 +29,40 @@ function segsOverlap(a, b, c, d) {
 
 export const LEVELS = ['strategisch', 'operativ', 'technisch'];
 
+// Kleine Stufe: kurzes Segment (≤ STEP px) zwischen zwei parallelen Segmenten gleicher Richtung (sieht aus wie ein Knick).
+export const STEP = 10;
+export function miniSteps(w = []) {
+  const found = [];
+  for (let i = 1; i < w.length - 2; i++) {
+    const [a, b, c, d] = [w[i - 1], w[i], w[i + 1], w[i + 2]];
+    const h = a.y === b.y && b.x === c.x && c.y === d.y && Math.abs(c.y - b.y) > 0 && Math.abs(c.y - b.y) <= STEP && (b.x - a.x) * (d.x - c.x) > 0;
+    const v = a.x === b.x && b.y === c.y && c.x === d.x && Math.abs(c.x - b.x) > 0 && Math.abs(c.x - b.x) <= STEP && (b.y - a.y) * (d.y - c.y) > 0;
+    if (h || v) found.push({ i, axis: h ? 'y' : 'x', off: h ? c.y - b.y : c.x - b.x });
+  }
+  return found;
+}
+
+// Prüft Hauptebene und alle Drill-down-Ebenen (zugeklappte Teilprozesse) und fasst die Ergebnisse zusammen.
+export function checkAll(graphs, opts = {}) {
+  const res = graphs.map((g) => ({ g, r: checkDiagram(g, opts) }));
+  const problems = res.flatMap(({ g, r }) => g.root?.plane ? r.problems.map((p) => ({ ...p, message: `[Ebene ${g.root.planeName ? `„${g.root.planeName}“` : g.root.plane}] ${p.message}` })) : r.problems);
+  const order = { error: 0, warning: 1, hint: 2 };
+  problems.sort((a, b) => order[a.severity] - order[b.severity]);
+  const inv = res.map(({ r }) => r.inventory).reduce((a, b) => {
+    const o = { ...a };
+    for (const [k, v] of Object.entries(b)) {
+      if (typeof v === 'number') o[k] = (o[k] ?? 0) + v;
+      else { o[k] = { ...(o[k] ?? {}) }; for (const [kk, vv] of Object.entries(v)) o[k][kk] = (o[k][kk] ?? 0) + vv; }
+    }
+    return o;
+  });
+  return { problems, crossings: res.reduce((s, { r }) => s + r.crossings, 0), inventory: { ...inv, ebenen: graphs.length - 1 } };
+}
+
 export function checkDiagram(graph, opts = {}) {
   const level = LEVELS.includes(opts.level) ? opts.level : undefined;
+  // Drill-down-Ebene eines zugeklappten Teilprozesses: nur Regeln für die Elemente, nicht für das Gesamtmodell (Pools, Lanes, Umfang).
+  const subPlane = !!graph.root?.plane;
   const c7 = graph.root?.platform === 'camunda7', C = c7 ? 'Camunda 7' : 'Camunda 8';
   const P = [];
   const add = (severity, rule, message, ids = []) => P.push({ severity, rule, message, ids });
@@ -56,6 +88,7 @@ export function checkDiagram(graph, opts = {}) {
         if (w.some((p, i) => i < w.length - 1 && segHitsBox(p, w[i + 1], n))) add('error', 'linie-durch-element', `Verbindung ${e.id} (${e.source} → ${e.target}) läuft durch ${q(n)}.`, [e.id, n.id]);
       }
       if (e.type === 'SequenceFlow' && w.some((p, i) => i < w.length - 1 && p.x !== w[i + 1].x && p.y !== w[i + 1].y)) add('hint', 'schraege-linie', `Verbindung ${e.id} verläuft schräg statt rechtwinklig.`, [e.id]);
+      if (miniSteps(w).length) add('warning', 'mini-stufe', `Verbindung ${e.id} (${e.source} → ${e.target}) hat einen kleinen Knick (Stufe ≤ ${STEP} px) – relayout begradigt ihn.`, [e.id]);
     }
     for (let i = 0; i < solid.length; i++) for (let j = i + 1; j < solid.length; j++) {
       const a = solid[i], b = solid[j];
@@ -95,7 +128,10 @@ export function checkDiagram(graph, opts = {}) {
     if (isContainer(n) || isArtifact(n)) continue;
     const o = out(n.id), i = inn(n.id);
     if (isTask(n) && !n.name) add('warning', 'name-fehlt', `Aufgabe ${n.id} hat keinen Namen (Schema: Objekt + Verb, z. B. „Antrag prüfen“).`, [n.id]);
-    else if (isTask(n) && !/\s/.test(n.name.trim())) add('hint', 'name-schema', `Aufgabe ${q(n)}: Schema „Objekt + Verb“ verwenden (z. B. „Auftrag prüfen“).`, [n.id]);
+    else if (isTask(n) && !/\s/.test(n.name.trim()) && !(/SubProcess$/.test(n.type) && n.expanded === false)) add('hint', 'name-schema', `Aufgabe ${q(n)}: Schema „Objekt + Verb“ verwenden (z. B. „Auftrag prüfen“).`, [n.id]);
+    // bpmn-js bricht zu lange Wörter mitten im Wort um ("Antragsgenehm|igung"): weiches Trennzeichen (U+00AD) oder Bindestrich setzen.
+    const longWords = (n.name ?? '').split(/[\s/]+/).filter((w) => w.length > 13 && !/[\u00AD-]/.test(w));
+    if (longWords.length) add('hint', 'silbentrennung', `${q(n)}: ${longWords.map((w) => `„${w}“`).join(', ')} wird mitten im Wort umbrochen – weiches Trennzeichen \\u00AD einfügen (z. B. „Antrags\\u00ADgenehmigung“, sichtbar nur beim Umbruch).`, [n.id]);
     if (isEvent(n) && !n.name) add('warning', 'name-fehlt', `Ereignis ${n.id} hat keinen Namen (Schema: Objekt + Partizip, z. B. „Auftrag erhalten“).`, [n.id]);
     if (/^(Exclusive|Inclusive)Gateway$/.test(n.type) && o.length > 1) {
       if (!n.name) add('warning', 'gateway-frage', `Verzweigendes Gateway ${n.id} als Frage benennen (z. B. „Daten korrekt?“).`, [n.id]);
@@ -117,6 +153,7 @@ export function checkDiagram(graph, opts = {}) {
     // ---------- Camunda 8 ----------
     if (n.type === 'IntermediateCatchEvent' && !n.eventDefinition) add('error', 'ereignistyp-fehlt', `Zwischenereignis ${q(n)} hat keinen Typ (Timer, Nachricht, …).`, [n.id]);
     if (n.type === 'BoundaryEvent' && !n.eventDefinition) add('error', 'ereignistyp-fehlt', `Angeheftetes Ereignis ${q(n)} hat keinen Typ.`, [n.id]);
+    if (n.eventDefinition?.type === 'conditional' && !n.eventDefinition.value && technical(n)) add('error', 'bedingung-fehlt', `Bedingungsereignis ${q(n)} hat keine Bedingung (${c7 ? '${…}' : '= …'}).`, [n.id]);
     if (technical(n)) technicalRules(n);
     if (n.type === 'EventBasedGateway') {
       if (o.length < 2) add('error', 'ereignis-gateway', `Ereignisbasiertes Gateway ${q(n)} braucht mindestens zwei Ausgänge.`, [n.id]);
@@ -163,7 +200,7 @@ export function checkDiagram(graph, opts = {}) {
     }
     if (n.type === 'ManualTask' || n.type === 'Task') add('hint', 'task-typ', `${q(n)} ist ${n.type === 'Task' ? 'untypisiert' : 'ein Manual Task'} – die Process Engine führt ihn nicht aus (Tasks typisieren).`, [n.id]);
   }
-  if (c7 && level !== 'strategisch' && level !== 'operativ') {
+  if (c7 && level !== 'strategisch' && level !== 'operativ' && !subPlane) {
     const procs = [graph.root?.process, ...graph.nodes.filter((n) => n.type === 'Participant').map((n) => n.process)].filter((p) => p?.isExecutable);
     for (const p of procs) if (!p.historyTimeToLive) add('warning', 'history-ttl', `Camunda 7: Prozess ${p.processId} hat kein historyTimeToLive (ab 7.20 lehnt die Engine das Deployment sonst ab).`);
     if (level === 'technisch' && !procs.length) add('error', 'nicht-ausfuehrbar', 'Kein Prozess ist als ausführbar markiert (isExecutable).');
@@ -251,7 +288,7 @@ export function checkDiagram(graph, opts = {}) {
   // ---------- Ebene: strategisches bzw. operatives Modell (Empfehlungen aus der Vorlesung) ----------
   const flowNodes = graph.nodes.filter((n) => !isContainer(n) && !isArtifact(n));
   const expandedPools = graph.nodes.filter((n) => n.type === 'Participant' && n.expanded !== false);
-  if (level === 'strategisch') {
+  if (level === 'strategisch' && !subPlane) {
     const steps = graph.nodes.filter((n) => isTask(n) || (/SubProcess$/.test(n.type) && !n.triggeredByEvent));
     if (steps.length > 10) add('warning', 'strategisch-umfang', `Strategisches Modell: ${steps.length} Schritte – grob granular bleiben (höchstens 10 Schritte, eine A4-Seite).`);
     const typed = steps.filter((n) => /^(User|Service|Script|BusinessRule|Send|Receive|Manual)Task$/.test(n.type));
@@ -268,7 +305,7 @@ export function checkDiagram(graph, opts = {}) {
     if (expandedPools.length > 1 || msg.length) add('hint', 'strategisch-pool', 'Strategisches Modell: ein Pool mit Lanes je Aufgabenträger; Kommunikation über Datenobjekte statt Nachrichtenflüsse darstellen.');
     if (!graph.nodes.some((n) => n.type === 'Lane')) add('hint', 'strategisch-pool', 'Strategisches Modell: Verantwortlichkeiten über Lanes zuordnen.');
   }
-  if (level === 'operativ') {
+  if (level === 'operativ' && !subPlane) {
     if (expandedPools.length < 2) add('warning', 'operativ-pools', 'Operatives Modell: als Kollaborationsdiagramm mit mehreren ausmodellierten Pools modellieren (menschliche Flüsse und Process Engine getrennt).');
     if (expandedPools.length > 1 && !msg.length) add('warning', 'operativ-pools', 'Operatives Modell: die Pools tauschen keine Nachrichten aus.');
     if (!graph.nodes.some((n) => /^Data/.test(n.type))) add('hint', 'operativ-datenfluss', 'Operatives Modell: Datenfluss fehlt (Datenobjekte/-speicher mit Lese- und Schreibzugriff).');
@@ -305,7 +342,7 @@ function inventory(graph, byId) {
 export function formatInventory(inv) {
   const obj = (o) => Object.entries(o).map(([k, v]) => `${k} ${v}`).join(', ') || '–';
   return [
-    `Umfang: ${inv.pools} ausmodellierte Pools, ${inv.zugeklapptePools} zugeklappte, ${inv.lanes} Lanes, ${inv.tasks} Tasks.`,
+    `Umfang: ${inv.pools} ausmodellierte Pools, ${inv.zugeklapptePools} zugeklappte, ${inv.lanes} Lanes, ${inv.tasks} Tasks${inv.ebenen ? `, ${inv.ebenen} Drill-down-Ebene(n) zugeklappter Teilprozesse` : ''}.`,
     `Basiskonstrukte: ${inv.nachrichtenfluesse} Nachrichtenflüsse, ${inv.datenobjekte} Datenobjekte/-speicher (${inv.datenassoziationen} Datenassoziationen), Gateways: ${obj(inv.gateways)}, ${inv.boundaryAnTasks} angeheftete Ereignisse an Tasks.`,
     `Fortgeschrittene Konstrukte: ${inv.mehrfachinstanzen} Mehrfachinstanzen, ${inv.ereignisTeilprozesse} Ereignis-Teilprozesse, ${inv.teilprozesse} Teilprozesse (${inv.boundaryAnTeilprozessen} angeheftete Ereignisse an Teilprozessen), ${inv.callActivities} Call Activities; Ereignistypen: ${obj(inv.ereignistypen)}.`,
   ].join('\n');

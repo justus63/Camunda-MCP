@@ -125,8 +125,12 @@ function* flowGen(ctx, cid, lanes) {
     }
     if (lb && isGateway(w.n)) w.up += lb.height + 8;
     if (w.be.length) w.down += 22 + Math.max(0, ...w.be.map((b) => b.label?.height ?? 0));
-    w.artBase = w.up;
-    if (w.arts.length) w.up += 30 + Math.max(...w.arts.map((a) => a.height));
+    // Anmerkungen über dem Element, aber auch über den Aufgaben daneben (gleiche Mittellinie, halbe Höhe 40):
+    // breite Anmerkungen an kleinen Ereignissen ragen sonst in die Nachbaraufgabe.
+    w.artBase = w.arts.length ? Math.max(w.up, 48) : w.up;
+    // Platz auch für die schmalere, höhere Variante (siehe Platzierung der Anmerkungen unten).
+    const artH = (a) => (a.type === 'TextAnnotation' && a.width > 130 ? Math.max(a.height, Math.ceil((a.width * a.height) / 130 / 10) * 10 + 10) : a.height);
+    if (w.arts.length) w.up = w.artBase + 30 + Math.max(...w.arts.map(artH));
   }
 
   const E = [];
@@ -501,17 +505,48 @@ function* flowGen(ctx, cid, lanes) {
     if (lb && isGateway(w.n)) {
       res.labels[w.id] = { x: corner.get(w.id)?.top ? (topUse.get(w.id) === 'entry' ? xc(w) + 10 : xc(w) - lb.width - 10) : w.arts.length ? xc(w) - lb.width - 10 : xc(w) - lb.width / 2, y: w.y - w.h / 2 - 6 - lb.height, width: lb.width, height: lb.height };
     }
-    w.arts.forEach((a, k) => {
-      const gl = lb && isGateway(w.n) ? (corner.get(w.id)?.top && topUse.get(w.id) === 'entry' ? -1 : 1) : 0; // neben die Gateway-Beschriftung, nicht darüber
-      const ax = gl ? (gl > 0 ? xc(w) + 14 + k * (a.width + 20) : xc(w) - 14 - a.width - k * (a.width + 20)) : xc(w) - a.width / 2 + (k - (w.arts.length - 1) / 2) * (a.width + 50);
-      const ay = w.y - w.artBase - 20 - a.height;
-      res.shapes[a.id] = { x: ax, y: ay, width: a.width, height: a.height };
-      if (a.label) res.labels[a.id] = { x: ax + a.width + 6, y: ay + a.height / 2 - a.label.height / 2, width: a.label.width, height: a.label.height };
-    });
   }
   for (const { cx, cy, b } of bePos.values()) {
     res.shapes[b.id] = { x: cx - 18, y: cy - 18, width: 36, height: 36 };
     if (b.label) res.labels[b.id] = { x: cx - 8 - b.label.width, y: cy + 21, width: b.label.width, height: b.label.height };
+  }
+  // Anmerkungen/Datenobjekte über ihrem Element; erst wenn alles andere steht, damit sie keiner Linie und keinem Element im Weg sind.
+  const segHits = (p, q, r) => {
+    const n = Math.max(2, Math.ceil(Math.hypot(q.x - p.x, q.y - p.y) / 6));
+    for (let i = 0; i <= n; i++) { const x = p.x + ((q.x - p.x) * i) / n, y = p.y + ((q.y - p.y) * i) / n; if (x > r.x && x < r.x + r.width && y > r.y && y < r.y + r.height) return true; }
+    return false;
+  };
+  const boxHits = (r, o) => r.x < o.x + o.width && o.x < r.x + r.width && r.y < o.y + o.height && o.y < r.y + r.height;
+  const clashes = (r) => {
+    const g = { x: r.x - 6, y: r.y - 6, width: r.width + 12, height: r.height + 12 };
+    return Object.values(res.shapes).filter((o) => boxHits(g, o)).length * 3 + Object.values(res.labels).filter((o) => boxHits(g, o)).length
+      + Object.values(res.edges).filter((w) => w.some((p, i) => i < w.length - 1 && segHits(p, w[i + 1], g))).length * 2;
+  };
+  const free = (r) => !clashes(r);
+  for (const w of N.values()) {
+    const lb = w.n.label;
+    w.arts.forEach((a, k) => {
+      const gl = lb && isGateway(w.n) ? (corner.get(w.id)?.top && topUse.get(w.id) === 'entry' ? -1 : 1) : 0; // neben die Gateway-Beschriftung, nicht darüber
+      const def = gl ? (gl > 0 ? xc(w) + 14 + k * (a.width + 20) : xc(w) - 14 - a.width - k * (a.width + 20)) : xc(w) - a.width / 2 + (k - (w.arts.length - 1) / 2) * (a.width + 50);
+      const ay = w.y - w.artBase - 20 - a.height;
+      // Erst in voller Breite, sonst schmaler und entsprechend höher (Text bricht dann öfter um).
+      const sizes = [[a.width, a.height]];
+      if (a.type === 'TextAnnotation' && a.width > 130) sizes.push([130, Math.ceil((a.width * a.height) / 130 / 10) * 10 + 10]);
+      let pick = null, best = null;
+      for (const [aw, ah] of sizes) {
+        const y = w.y - w.artBase - 20 - ah;
+        for (const x of [def, xc(w) - aw / 2, xc(w) - w.w / 2, xc(w) + w.w / 2 - aw, xc(w) + w.w / 2 + 12, xc(w) - w.w / 2 - 12 - aw]) {
+          const r = { x, y, width: aw, height: ah }, c = clashes(r);
+          if (!c) { pick = r; break; }
+          if (!best || c < best.c) best = { r, c };
+        }
+        if (pick) break;
+      }
+      pick ??= best?.r ?? { x: def, y: ay, width: a.width, height: a.height };
+      const ax = pick.x;
+      res.shapes[a.id] = pick;
+      if (a.label) res.labels[a.id] = { x: ax + pick.width + 6, y: pick.y + pick.height / 2 - a.label.height / 2, width: a.label.width, height: a.label.height };
+    });
   }
   for (const e of E) if (e.label && res.edges[e.id]) res.labels[e.id] = edgeLabelBox(res.edges[e.id], e.label);
   // Teilen sich mehrere Ausgänge eines Elements den Anfang der Linie, lägen die Beschriftungen übereinander:
@@ -852,6 +887,14 @@ export function computeLayout(graph, opts = {}) {
   if (opts.only === 'messageFlows') return rerouteMessages(graph);
   const nodes = graph.nodes.map((n) => ({ ...n }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
+  // Anmerkungen/Datenobjekte gehören in einer Kollaboration oft zur Kollaboration selbst (kein parent):
+  // für das Layout dem Container des verknüpften Elements zuordnen, sonst bleiben sie liegen, wo sie waren.
+  for (const a of nodes) {
+    if (a.parent || !isArtifact(a) || a.type === 'Group') continue;
+    const e = graph.edges.find((e) => e.type !== 'SequenceFlow' && e.type !== 'MessageFlow' && (e.source === a.id || e.target === a.id));
+    const other = e && byId.get(e.source === a.id ? e.target : e.source);
+    if (other?.parent) a.parent = other.parent;
+  }
   const kids = new Map();
   for (const n of nodes) {
     const p = n.parent && byId.has(n.parent) ? n.parent : '';
@@ -973,6 +1016,7 @@ export function computeLayout(graph, opts = {}) {
     if (b.width) out.shapes[g.id] = { x: b.x - 20, y: b.y - 30, width: b.width + 40, height: b.height + 50 };
   }
 
+  straighten(out, graph);
   const b = bounds(out);
   shift(out, 160 - b.x, 80 - b.y);
   const round = (o) => { for (const k of Object.keys(o)) o[k] = Math.round(o[k]); };
@@ -981,4 +1025,35 @@ export function computeLayout(graph, opts = {}) {
   Object.values(out.edges).forEach((pts) => pts.forEach(round));
   delete out.laneY;
   return out;
+}
+
+// Kleine Stufen (≤ STEP px zwischen zwei parallelen Segmenten) begradigen: die Punkte hinter (bzw. vor) der Stufe
+// werden um den Versatz verschoben, solange der End- bzw. Anfangspunkt auf dem Rand des Ziel- bzw. Quellelements bleibt.
+const STEP = 10;
+function straighten(out, graph) {
+  const box = (id) => out.shapes[id] ?? graph.nodes.find((n) => n.id === id);
+  const within = (p, b, axis) => b && (axis === 'y' ? p.y >= b.y - 0.5 && p.y <= b.y + b.height + 0.5 : p.x >= b.x - 0.5 && p.x <= b.x + b.width + 0.5);
+  for (const e of graph.edges) {
+    let w = out.edges[e.id];
+    if (!w || w.length < 4) continue;
+    for (let guard = 0, changed = true; changed && guard < 10; guard++) {
+      changed = false;
+      for (let i = 1; i < w.length - 2; i++) {
+        const [a, p, c, d] = [w[i - 1], w[i], w[i + 1], w[i + 2]];
+        let axis, off;
+        if (a.y === p.y && p.x === c.x && c.y === d.y && c.y !== p.y && Math.abs(c.y - p.y) <= STEP && (p.x - a.x) * (d.x - c.x) > 0) [axis, off] = ['y', c.y - p.y];
+        else if (a.x === p.x && p.y === c.y && c.x === d.x && c.x !== p.x && Math.abs(c.x - p.x) <= STEP && (p.y - a.y) * (d.y - c.y) > 0) [axis, off] = ['x', c.x - p.x];
+        else continue;
+        const back = w.map((q, j) => (j > i ? { ...q, [axis]: q[axis] - off } : { ...q }));
+        const front = w.map((q, j) => (j <= i ? { ...q, [axis]: q[axis] + off } : { ...q }));
+        const next = within(back.at(-1), box(e.target), axis) ? back : within(front[0], box(e.source), axis) ? front : null;
+        if (!next) continue;
+        const dedup = next.filter((q, j) => !j || q.x !== next[j - 1].x || q.y !== next[j - 1].y);
+        w = dedup.filter((q, j) => j === 0 || j === dedup.length - 1 || !((dedup[j - 1].x === q.x && q.x === dedup[j + 1].x) || (dedup[j - 1].y === q.y && q.y === dedup[j + 1].y)));
+        changed = true;
+        break;
+      }
+    }
+    out.edges[e.id] = w;
+  }
 }

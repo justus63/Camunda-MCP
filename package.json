@@ -1,9 +1,9 @@
 {
   "name": "bpmn-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "main": "index.js",
   "scripts": {
-    "test": "node test.js && node test/file-full.mjs && node test/live-basic.mjs && node test/live-pools.mjs && node test/c7-direct.mjs && node test/collab-direct.mjs && node test/c7-file.mjs && node test/uml.mjs"
+    "test": "node test.js && node test/file-full.mjs && node test/live-basic.mjs && node test/live-pools.mjs && node test/c7-direct.mjs && node test/collab-direct.mjs && node test/c7-file.mjs && node test/uml.mjs && node test/projekt-fixes.mjs && node test/engine-mock.mjs"
   },
   "keywords": [],
   "author": "",
@@ -13,6 +13,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "bpmn-js": "^18.31.1",
+    "bpmnlint": "^12.1.1",
+    "bpmnlint-plugin-camunda-compat": "^2.63.0",
     "camunda-bpmn-moddle": "^7.0.2",
     "puppeteer-core": "^25.17.0",
     "ws": "^8.22.2",
