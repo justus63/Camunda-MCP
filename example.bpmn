@@ -1,55 +1,55 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:modeler="http://camunda.org/schema/modeler/1.0" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn" modeler:executionPlatform="Camunda Cloud" modeler:executionPlatformVersion="8.8.0">
-  <bpmn:process id="Process_1" name="Bestellung" isExecutable="true">
-    <bpmn:startEvent id="Start" name="Bestellung eingegangen">
+  <bpmn:process id="Process_1" name="Order" isExecutable="true">
+    <bpmn:startEvent id="Start" name="Order received">
       <bpmn:outgoing>Flow_1</bpmn:outgoing>
     </bpmn:startEvent>
-    <bpmn:serviceTask id="Pruefen" name="Bestand prüfen">
+    <bpmn:serviceTask id="Check" name="Check stock">
       <bpmn:extensionElements>
         <zeebe:taskDefinition type="check-stock" />
       </bpmn:extensionElements>
       <bpmn:incoming>Flow_1</bpmn:incoming>
       <bpmn:outgoing>Flow_2</bpmn:outgoing>
     </bpmn:serviceTask>
-    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="Pruefen" />
-    <bpmn:exclusiveGateway id="GW" name="Verfügbar?">
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="Check" />
+    <bpmn:exclusiveGateway id="GW" name="Available?">
       <bpmn:incoming>Flow_2</bpmn:incoming>
       <bpmn:outgoing>Flow_3</bpmn:outgoing>
       <bpmn:outgoing>Flow_5</bpmn:outgoing>
     </bpmn:exclusiveGateway>
-    <bpmn:sequenceFlow id="Flow_2" sourceRef="Pruefen" targetRef="GW" />
-    <bpmn:userTask id="Versand" name="Versenden">
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Check" targetRef="GW" />
+    <bpmn:userTask id="Ship" name="Ship order">
       <bpmn:incoming>Flow_3</bpmn:incoming>
       <bpmn:outgoing>Flow_4</bpmn:outgoing>
     </bpmn:userTask>
-    <bpmn:sequenceFlow id="Flow_3" name="ja" sourceRef="GW" targetRef="Versand" />
-    <bpmn:endEvent id="EndeOk" name="Fertig">
+    <bpmn:sequenceFlow id="Flow_3" name="yes" sourceRef="GW" targetRef="Ship" />
+    <bpmn:endEvent id="EndOk" name="Order shipped">
       <bpmn:incoming>Flow_4</bpmn:incoming>
     </bpmn:endEvent>
-    <bpmn:sequenceFlow id="Flow_4" sourceRef="Versand" targetRef="EndeOk" />
-    <bpmn:endEvent id="EndeNok" name="Abgelehnt">
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Ship" targetRef="EndOk" />
+    <bpmn:endEvent id="EndNok" name="Order rejected">
       <bpmn:incoming>Flow_5</bpmn:incoming>
     </bpmn:endEvent>
-    <bpmn:sequenceFlow id="Flow_5" name="nein" sourceRef="GW" targetRef="EndeNok" />
+    <bpmn:sequenceFlow id="Flow_5" name="no" sourceRef="GW" targetRef="EndNok" />
   </bpmn:process>
   <bpmndi:BPMNDiagram id="BPMNDiagram_Process_1">
     <bpmndi:BPMNPlane id="BPMNPlane_Process_1" bpmnElement="Process_1">
       <bpmndi:BPMNShape id="Start_di" bpmnElement="Start">
         <dc:Bounds x="57" y="52" width="36" height="36" />
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="Pruefen_di" bpmnElement="Pruefen">
+      <bpmndi:BPMNShape id="Check_di" bpmnElement="Check">
         <dc:Bounds x="175" y="30" width="100" height="80" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="GW_di" bpmnElement="GW" isMarkerVisible="true">
         <dc:Bounds x="350" y="45" width="50" height="50" />
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="Versand_di" bpmnElement="Versand">
+      <bpmndi:BPMNShape id="Ship_di" bpmnElement="Ship">
         <dc:Bounds x="475" y="30" width="100" height="80" />
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="EndeOk_di" bpmnElement="EndeOk">
+      <bpmndi:BPMNShape id="EndOk_di" bpmnElement="EndOk">
         <dc:Bounds x="657" y="52" width="36" height="36" />
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="EndeNok_di" bpmnElement="EndeNok">
+      <bpmndi:BPMNShape id="EndNok_di" bpmnElement="EndNok">
         <dc:Bounds x="507" y="192" width="36" height="36" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">

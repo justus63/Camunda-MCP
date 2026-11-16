@@ -1,6 +1,6 @@
-// UML-Diagramme aus einer Beschreibung: Klassendiagramm (Domänenmodell) und Zustandsdiagramm (Objektlebenszyklus).
-// Ergebnis jeweils { svg, drawio, problems }: SVG zum Ansehen/Exportieren (PDF/PNG macht headless.js), draw.io-XML zum Weiterbearbeiten.
-// Die Anordnung ist deterministisch (fester Zufallsstartwert), d. h. dieselbe Beschreibung ergibt immer dasselbe Bild.
+// UML diagrams from a description: class diagram (domain model) and state diagram (object lifecycle).
+// Each returns { svg, drawio, problems }: SVG for viewing/exporting (headless.js makes PDF/PNG), draw.io XML for further editing.
+// The arrangement is deterministic (fixed random seed), i.e. the same description always yields the same picture.
 import { computeLayout } from './layout.js';
 
 const INK = '#1f2d3d', HEAD = '#dbe9f4', MUTED = '#4a5563', NOTE = '#fff8dc';
@@ -33,7 +33,7 @@ function rng(seed) {
   return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
 }
 
-// ---------- Geometrie ----------
+// ---------- Geometry ----------
 const hitsBox = (a, b, o, pad = 6) => Math.min(a.x, b.x) < o.x + o.w + pad && Math.max(a.x, b.x) > o.x - pad && Math.min(a.y, b.y) < o.y + o.h + pad && Math.max(a.y, b.y) > o.y - pad;
 function crosses(a, b, c, d) {
   const o = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
@@ -50,7 +50,7 @@ function overlaps(a, b, c, d) {
 const segs = (pts) => pts.slice(1).map((p, i) => [pts[i], p]);
 const clean = (pts) => pts.filter((p, i) => !i || p.x !== pts[i - 1].x || p.y !== pts[i - 1].y);
 
-// ---------- Klassendiagramm: Anordnung im Raster ----------
+// ---------- Class diagram: arrangement in a grid ----------
 function placeClasses(classes, rels) {
   const n = classes.length;
   const fixed = classes.filter((c) => Number.isInteger(c.col) && Number.isInteger(c.row));
@@ -70,8 +70,8 @@ function placeClasses(classes, rels) {
       if (!dc) for (let r = Math.min(p.r, q.r) + 1; r < Math.max(p.r, q.r); r++) if (used(p.c, r)) k += 8;
       if (!dr) for (let c = Math.min(p.c, q.c) + 1; c < Math.max(p.c, q.c); c++) if (used(c, p.r)) k += 8;
       if (dc && dr && used(p.c, q.r) && used(q.c, p.r)) k += 2;
-      if (e.type === 'generalization') k += p.r <= q.r ? 10 : (p.r - q.r - 1) * 0.6 + dc * 0.3; // Unterklasse unter die Oberklasse
-      if ((e.type === 'composition' || e.type === 'aggregation') && q.r < p.r) k += 1.5; // Teile nicht über das Ganze
+      if (e.type === 'generalization') k += p.r <= q.r ? 10 : (p.r - q.r - 1) * 0.6 + dc * 0.3; // subclass below the superclass
+      if ((e.type === 'composition' || e.type === 'aggregation') && q.r < p.r) k += 1.5; // parts not above the whole
     }
     for (let i = 0; i < R.length; i++) for (let j = i + 1; j < R.length; j++) {
       const a = pos[R[i].a], b = pos[R[i].b], c = pos[R[j].a], d = pos[R[j].b];
@@ -84,7 +84,7 @@ function placeClasses(classes, rels) {
     const rand = rng(12345 + run * 977);
     const pos = classes.map(() => null), taken = new Set();
     for (const c of fixed) { pos[c.i] = { c: c.col, r: c.row }; taken.add(`${c.col},${c.row}`); }
-    // Start: stark vernetzte Klassen zuerst, reihenweise
+    // Start: highly connected classes first, row by row
     const order = classes.filter((c) => !pos[c.i]).sort((a, b) => deg[b.i] - deg[a.i] || a.i - b.i);
     const free = [];
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (!taken.has(`${c},${r}`)) free.push({ c, r });
@@ -110,7 +110,7 @@ function placeClasses(classes, rels) {
   return best.map((p) => ({ c: p.c - c0, r: p.r - r0 }));
 }
 
-// ---------- Klassendiagramm: Beziehungen rechtwinklig verlegen ----------
+// ---------- Class diagram: route relations at right angles ----------
 const GX = 130, GY = 110;
 function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
   const mid = (b, side) => (side === 'top' ? { x: b.cx, y: b.y } : side === 'bottom' ? { x: b.cx, y: b.y + b.h } : side === 'left' ? { x: b.x, y: b.cy } : { x: b.x + b.w, y: b.cy });
@@ -140,7 +140,7 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
     const xo = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x), yo = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y);
     const below = B.y >= A.y + A.h, above = A.y >= B.y + B.h, right = B.x >= A.x + A.w, left = A.x >= B.x + B.w;
     const sv = below ? ['bottom', 'top'] : ['top', 'bottom'], sh = right ? ['right', 'left'] : ['left', 'right'];
-    if (r.a === r.b) { r.rt = { kind: 'self', sides: ['top', 'top'] }; continue; } // reflexive Assoziation: Schleife über der Klasse
+    if (r.a === r.b) { r.rt = { kind: 'self', sides: ['top', 'top'] }; continue; } // reflexive association: loop above the class
     if (xo >= 50 && (below || above)) cands.push({ kind: 'V', sides: sv, fix: Math.max(A.x, B.x) + xo / 2 });
     if (yo >= 30 && (right || left)) cands.push({ kind: 'H', sides: sh, fix: Math.max(A.y, B.y) + yo / 2 });
     if (below || above) {
@@ -152,7 +152,7 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
       const ca = A.col, cb = B.col;
       for (const g of new Set(right ? [ca, cb - 1] : [ca - 1, cb])) cands.push({ kind: 'HVH', sides: sh, gap: g, at: colX[g] + colW[g] + GX / 2 });
     }
-    // Ausweichrouten um dazwischenliegende Klassen herum (U-Form durch den Zwischenraum darunter/darüber bzw. daneben)
+    // Detours around classes in between (U shape through the gap below/above or beside)
     if (!below && !above) {
       cands.push({ kind: 'VHV', sides: ['bottom', 'bottom'], gap: Math.max(A.row, B.row), at: Math.max(A.y + A.h, B.y + B.h, rowY[A.row] + rowH[A.row]) + GY / 2, detour: 1 });
       if (Math.min(A.row, B.row) > 0) cands.push({ kind: 'VHV', sides: ['top', 'top'], gap: Math.min(A.row, B.row) - 1, at: rowY[Math.min(A.row, B.row)] - GY / 2, detour: 1 });
@@ -167,7 +167,7 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
       if (rt.kind === 'V') pa = { ...pa, x: rt.fix }, pb = { ...pb, x: rt.fix };
       if (rt.kind === 'H') pa = { ...pa, y: rt.fix }, pb = { ...pb, y: rt.fix };
       const pts = build(rt, pa, pb);
-      // Vererbung als Baum: Unterklasse unter der Oberklasse bevorzugt über den gemeinsamen Zwischenraum
+      // Inheritance as a tree: subclass below the superclass, preferably via the shared gap
       const s = score(pts, r) - (r.type === 'generalization' && (rt.kind === 'VHV' || rt.kind === 'V') ? 3 : 0) + (rt.detour ? 8 : 0);
       if (!best || s < best.s) best = { s, rt, pts };
     }
@@ -175,7 +175,7 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
     r.rt = best.rt;
     done.push({ r, pts: best.pts });
   }
-  // Anschlusspunkte je Seite verteilen
+  // Distribute the connection points per side
   const ends = new Map(); // box|side -> [{ r, end, fixed, key }]
   for (const r of rels) {
     if (!r.rt) continue;
@@ -194,7 +194,7 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
     for (const e of list) if (e.fixed !== undefined) {
       let v = Math.max(lo, Math.min(hi, e.fixed));
       if (e.tree === null && e.r.rt.kind.length === 1) {
-        // parallele gerade Beziehungen nebeneinander; zwischen denselben zwei Klassen mit Platz für die Beschriftungen
+        // parallel straight relations side by side; between the same two classes with room for the labels
         const pair = list.some((o) => o !== e && o.pos !== undefined && o.r.a === e.r.a && o.r.b === e.r.b);
         while (taken.some((t) => Math.abs(t - v) < (pair ? 60 : 16))) v += pair ? 64 : 18;
       }
@@ -204,8 +204,8 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
     }
     const free = list.filter((e) => e.fixed === undefined).sort((p, q) => p.sort - q.sort);
     free.forEach((e, k) => {
-      // Gleichmäßig verteilen, aber nicht über einen festen (geraden) Anschluss hinweg auf die der Gegenklasse abgewandte Seite:
-      // sonst kreuzt die Linie die gerade Beziehung.
+      // Distribute evenly, but not past a fixed (straight) connection onto the side facing away from the other class:
+      // otherwise the line crosses the straight relation.
       let v = lo + ((k + 1) * (hi - lo)) / (free.length + 1);
       const fixedPos = list.filter((o) => o.fixed !== undefined).map((o) => o.pos);
       const toward = Math.sign(e.sort - v) || 1;
@@ -222,12 +222,12 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
       e.r[e.k ? 'pb' : 'pa'] = p;
     }
   }
-  // gerade Beziehungen: beide Enden auf dieselbe Koordinate
+  // straight relations: both ends on the same coordinate
   for (const r of rels) {
     if (r.rt?.kind === 'V') r.pa.x = r.pb.x = r.rt.fix2 ?? r.pa.x;
     if (r.rt?.kind === 'H') r.pa.y = r.pb.y = r.rt.fix2 ?? r.pa.y;
   }
-  // Spuren in den Zwischenräumen
+  // Tracks in the gaps
   for (const kind of ['VHV', 'HVH']) {
     const byGap = new Map();
     for (const r of rels) if (r.rt?.kind === kind) { if (!byGap.has(r.rt.gap)) byGap.set(r.rt.gap, []); byGap.get(r.rt.gap).push(r); }
@@ -251,8 +251,8 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
     }
   }
   for (const r of rels) r.pts = r.rt ? build(r.rt, r.pa, r.pb).map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })) : [];
-  // Zwei Beziehungen, deren Endstücke auf derselben Senkrechten fast aneinanderstoßen, sähen wie eine durchgehende Linie aus:
-  // das Ende der zweiten etwas zur Seite rücken.
+  // Two relations whose end pieces almost touch on the same vertical would look like one continuous line:
+  // move the end of the second one a little to the side.
   const endSeg = (r, k) => (k ? [r.pts[r.pts.length - 1], r.pts[r.pts.length - 2]] : [r.pts[0], r.pts[1]]);
   for (const r of rels) {
     if (!r.rt || r.pts.length < 3 || r.rt.kind === 'V' || r.rt.kind === 'self') continue;
@@ -270,38 +270,38 @@ function routeRelations(boxes, rels, colX, colW, rowY, rowH) {
   }
 }
 
-// ---------- Klassendiagramm ----------
+// ---------- Class diagram ----------
 export function classDiagram(spec) {
   const problems = [];
   const classes = (spec.classes ?? []).map((c, i) => ({ ...c, i, attrs: c.attributes ?? [] }));
-  if (!classes.length) throw new Error('Mindestens eine Klasse angeben.');
+  if (!classes.length) throw new Error('Pass at least one class.');
   const byName = new Map();
-  for (const c of classes) { if (byName.has(c.name)) throw new Error(`Klasse doppelt: ${c.name}`); byName.set(c.name, c); }
+  for (const c of classes) { if (byName.has(c.name)) throw new Error(`Duplicate class: ${c.name}`); byName.set(c.name, c); }
   const rels = (spec.relations ?? []).map((r) => {
     const a = byName.get(r.from), b = byName.get(r.to);
-    if (!a || !b) throw new Error(`Beziehung ${r.from} → ${r.to}: Klasse "${a ? r.to : r.from}" gibt es nicht.`);
+    if (!a || !b) throw new Error(`Relation ${r.from} → ${r.to}: class "${a ? r.to : r.from}" does not exist.`);
     return { ...r, type: r.type ?? 'association', a, b };
   });
 
-  // Fachliche Prüfung (Folien "Das Domänenmodell")
+  // Domain model check
   for (const c of classes) {
     const isEnum = /enum/i.test(c.stereotype ?? '');
-    if (!c.attrs.length && !c.abstract && !isEnum) problems.push(`Klasse ${c.name} hat keine Attribute.`);
+    if (!c.attrs.length && !c.abstract && !isEnum) problems.push(`Class ${c.name} has no attributes.`);
     for (const a of c.attrs) {
-      if (/\(.*\)/.test(a)) problems.push(`${c.name}.${a}: Methoden gehören nicht ins Domänenmodell (fachliche Ebene, keine Implementierung).`);
-      else if (!isEnum && !a.includes(':')) problems.push(`${c.name}.${a}: Attribut ohne Typ (Schema "name: Typ").`);
+      if (/\(.*\)/.test(a)) problems.push(`${c.name}.${a}: methods do not belong in the domain model (business level, no implementation).`);
+      else if (!isEnum && !a.includes(':')) problems.push(`${c.name}.${a}: attribute without type (pattern "name: Type").`);
       const type = a.split(':')[1]?.trim().replace(/\[.*\]$/, '');
-      if (type && byName.has(type) && !/enum/i.test(byName.get(type).stereotype ?? '')) problems.push(`${c.name}.${a}: Klasse als Attributtyp – besser eine Assoziation zu ${type}.`);
+      if (type && byName.has(type) && !/enum/i.test(byName.get(type).stereotype ?? '')) problems.push(`${c.name}.${a}: class used as attribute type – better use an association to ${type}.`);
     }
-    if (classes.length > 1 && !rels.some((r) => r.a === c || r.b === c)) problems.push(`Klasse ${c.name} hat keine Beziehung zu anderen Klassen.`);
+    if (classes.length > 1 && !rels.some((r) => r.a === c || r.b === c)) problems.push(`Class ${c.name} has no relation to other classes.`);
   }
   for (const r of rels) {
     if (r.type === 'generalization' || r.type === 'dependency') continue;
-    if (!r.name && r.type === 'association') problems.push(`Assoziation ${r.from} – ${r.to} hat keinen Namen.`);
-    if (!r.fromMult || !r.toMult) problems.push(`${r.from} – ${r.to}: Kardinalität fehlt (${!r.fromMult ? 'fromMult' : ''}${!r.fromMult && !r.toMult ? ', ' : ''}${!r.toMult ? 'toMult' : ''}).`);
+    if (!r.name && r.type === 'association') problems.push(`Association ${r.from} – ${r.to} has no name.`);
+    if (!r.fromMult || !r.toMult) problems.push(`${r.from} – ${r.to}: multiplicity missing (${!r.fromMult ? 'fromMult' : ''}${!r.fromMult && !r.toMult ? ', ' : ''}${!r.toMult ? 'toMult' : ''}).`);
   }
 
-  // Größen
+  // Sizes
   for (const c of classes) {
     const head = 34 + (c.stereotype ? 15 : 0);
     const w = Math.max(150, textWidth(c.name, 14, true) + 36, c.stereotype ? textWidth(`«${c.stereotype}»`, 11) + 30 : 0, ...c.attrs.map((a) => textWidth(a) + 30));
@@ -326,16 +326,16 @@ export function classDiagram(spec) {
   const boxes = classes.map((c) => c.box);
   routeRelations(boxes, rels, colX, colW, rowY, rowH);
   for (const r of rels) for (const [a, b] of segs(r.pts)) for (const c of classes) {
-    if (c !== r.a && c !== r.b && hitsBox(a, b, c.box, 0)) problems.push(`Beziehung ${r.from} – ${r.to} läuft durch Klasse ${c.name}: Anordnung mit col/row anpassen.`);
+    if (c !== r.a && c !== r.b && hitsBox(a, b, c.box, 0)) problems.push(`Relation ${r.from} – ${r.to} runs through class ${c.name}: adjust the arrangement with col/row.`);
   }
 
-  // Beschriftungen: Name in der Mitte, Kardinalitäten und Rollen an den Enden
+  // Labels: name in the middle, multiplicities and roles at the ends
   const texts = [];
-  // Beschriftung frei: keine andere Beschriftung, keine Klasse und keine Linie darunter
+  // Label is free: no other label, no class and no line below it
   const lineHit = (t) => rels.some((r) => segs(r.pts ?? []).some(([a, b]) => Math.max(a.x, b.x) > t.x - 5 && Math.min(a.x, b.x) < t.x + t.w + 5 && Math.max(a.y, b.y) > t.y - 8 && Math.min(a.y, b.y) < t.y + t.h + 8));
   const free = (t) => !texts.some((o) => t.x < o.x + o.w + 3 && o.x < t.x + t.w + 3 && t.y < o.y + o.h + 2 && o.y < t.y + t.h + 2) && !boxes.some((o) => t.x < o.x + o.w && o.x < t.x + t.w && t.y < o.y + o.h && o.y < t.y + t.h) && !lineHit(t);
   const put = (cands) => { const t = cands.find(free) ?? cands[0]; texts.push(t); return t; };
-  // mark = Länge der Raute/Pfeilspitze an diesem Ende: die Beschriftung rückt dahinter
+  // mark = length of the diamond/arrowhead at this end: the label moves behind it
   const endText = (text, p, next, flip, mark = 0) => {
     if (!text) return;
     const w = textWidth(text, 12) + 2, h = 14, vertical = p.x === next.x, d = vertical ? Math.sign(next.y - p.y) : Math.sign(next.x - p.x);
@@ -354,7 +354,7 @@ export function classDiagram(spec) {
   }
   for (const r of rels) {
     if (!r.name || r.pts.length < 2) continue;
-    // Leserichtung (UML): ausgefülltes Dreieck am Namen, zeigt entlang der Linie von "from" nach "to"
+    // Reading direction (UML): filled triangle at the name, pointing along the line from "from" to "to"
     const h = 14, cands = [];
     for (const [a, b] of segs(r.pts).sort((p, q) => Math.hypot(q[0].x - q[1].x, q[0].y - q[1].y) - Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y))) {
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
@@ -367,7 +367,7 @@ export function classDiagram(spec) {
     put(cands.map((c) => ({ ...c, h }))).muted = true;
   }
 
-  // Notizen unter dem Diagramm
+  // Notes below the diagram
   let W = Math.max(...boxes.map((b) => b.x + b.w), ...texts.map((t) => t.x + t.w)) + 20;
   let H = Math.max(...boxes.map((b) => b.y + b.h), ...rels.flatMap((r) => r.pts.map((p) => p.y))) + 20;
   const notes = (spec.notes ?? []).map((n) => {
@@ -458,19 +458,19 @@ function drawioFile(name, cells, w, h) {
 `;
 }
 
-// ---------- Zustandsdiagramm (Objektlebenszyklus): nutzt das BPMN-Layout (links nach rechts, Hauptpfad gerade) ----------
+// ---------- State diagram (object lifecycle): uses the BPMN layout (left to right, straight main path) ----------
 export function stateDiagram(spec) {
   const problems = [];
   const states = (spec.states ?? []).map((s, i) => (typeof s === 'string' ? { name: s, i } : { ...s, i }));
   const byName = new Map(states.map((s) => [s.name, s]));
-  const need = (name, what) => { const s = byName.get(name); if (!s) throw new Error(`${what}: Zustand "${name}" gibt es nicht.`); return s; };
+  const need = (name, what) => { const s = byName.get(name); if (!s) throw new Error(`${what}: state "${name}" does not exist.`); return s; };
   const init = need(spec.initial, 'initial'), finals = (spec.finals ?? []).map((f) => need(f, 'finals'));
   const trans = (spec.transitions ?? []).map((t, k) => ({ ...t, k, a: need(t.from, 'transitions'), b: need(t.to, 'transitions') }));
   for (const s of states) {
-    if (s !== init && !trans.some((t) => t.b === s)) problems.push(`Zustand ${s.name} wird nie erreicht.`);
-    if (!finals.includes(s) && !trans.some((t) => t.a === s)) problems.push(`Zustand ${s.name} hat keinen Ausgang und ist kein Endzustand.`);
+    if (s !== init && !trans.some((t) => t.b === s)) problems.push(`State ${s.name} is never reached.`);
+    if (!finals.includes(s) && !trans.some((t) => t.a === s)) problems.push(`State ${s.name} has no outgoing transition and is not a final state.`);
   }
-  for (const t of trans) if (!t.label) problems.push(`Übergang ${t.from} → ${t.to} ohne Auslöser (Aktivität aus dem Prozess benennen).`);
+  for (const t of trans) if (!t.label) problems.push(`Transition ${t.from} → ${t.to} has no trigger (name an activity from the process).`);
 
   const lbl = (text) => { const lines = wrap(text, 22); return { lines, width: Math.max(...lines.map((l) => textWidth(l, 12))) + 6, height: lines.length * 15 + 2 }; };
   const nodes = [{ id: 'init', type: 'StartEvent', width: 24, height: 24, parent: null }];
@@ -515,7 +515,7 @@ export function stateDiagram(spec) {
     if (pts.length < 2) continue;
     const t = trans.find((t) => `t${t.k}` === e.id), lb = L.labels[e.id];
     let box = lb ? { x: lb.x + dx, y: lb.y + dy } : null;
-    // Beschriftung nie auf einen Zustand legen: sonst an die letzte Ecke vor dem Ziel
+    // Never put a label on a state: otherwise at the last corner before the target
     const onState = (b) => states.some((s) => { const o = S(`s${s.i}`); return b.x < o.x + o.w && o.x < b.x + lb.width && b.y < o.y + o.h && o.y < b.y + lb.height; });
     if (box && onState(box) && pts.length > 2) {
       const c = pts[pts.length - 2], up = pts[pts.length - 3].y > c.y;

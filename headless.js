@@ -1,6 +1,6 @@
-// Datei-Modus: öffnet .bpmn-Dateien in einem unsichtbaren bpmn-js (Headless-Chrome) und führt dort
-// genau dieselben Befehle aus wie das Modeler-Plugin im Live-Modus (plugin/client.js).
-// Ein Browser wird beim ersten Aufruf gestartet und nach längerer Pause wieder beendet.
+// File mode: opens .bpmn files in an invisible bpmn-js (headless Chrome) and runs exactly
+// the same commands there as the Modeler plugin in live mode (plugin/client.js).
+// A browser is started on the first call and shut down again after a longer idle period.
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -34,12 +34,12 @@ export function chromePath() {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
   const found = (CHROME_CANDIDATES[process.platform] ?? []).find((p) => existsSync(p));
   if (!found) {
-    throw new Error('Der Datei-Modus braucht Google Chrome, Chromium oder Edge. Keinen Browser gefunden: Umgebungsvariable CHROME_PATH auf die Programmdatei setzen.');
+    throw new Error('File mode needs Google Chrome, Chromium or Edge. No browser found: set the CHROME_PATH environment variable to the executable.');
   }
   return found;
 }
 
-// ---------- Browser mit bpmn-js + Plugin ----------
+// ---------- Browser with bpmn-js + plugin ----------
 let session = null; // { browser, page, file, xml }
 let idleTimer = null;
 
@@ -53,8 +53,8 @@ async function openSession() {
   await page.addStyleTag({ path: path.join(BPMN_JS, 'assets', 'diagram-js.css') });
   await page.addScriptTag({ path: path.join(BPMN_JS, 'bpmn-modeler.production.min.js') });
   await page.addScriptTag({ path: path.join(ROOT, 'plugin', 'client.js') });
-  // Je Plattform ein eigener Modeler (die zeebe- und camunda-Erweiterungen lassen sich nicht gemeinsam registrieren).
-  // Sichtbar ist immer nur der zur Datei passende; das Plugin arbeitet auf dem sichtbaren.
+  // One modeler per platform (the zeebe and camunda extensions cannot be registered together).
+  // Only the one matching the file is visible; the plugin works on the visible one.
   await page.evaluate((zeebe, camunda) => {
     const modules = window.plugins.filter((p) => p.type === 'bpmn.modeler.additionalModules').map((p) => p.plugin);
     const make = (id, ext) => new window.BpmnJS({ container: '#' + id, additionalModules: modules, moddleExtensions: ext });
@@ -84,13 +84,13 @@ export async function closeHeadless() {
   await s?.browser.close().catch(() => {});
 }
 
-// Fehler aus der Seite kommen mit Stacktrace zurück; nur die eigentliche Meldung zählt.
+// Errors from the page come back with a stack trace; only the actual message matters.
 function cleanError(e) {
   const msg = String(e?.message ?? e).split('\n')[0].replace(/^(Error|TypeError):\s*/, '');
   return new Error(msg);
 }
 
-// ---------- Aufrufe nacheinander ausführen (ein Browser, ein Diagramm) ----------
+// ---------- Run calls one after another (one browser, one diagram) ----------
 let queue = Promise.resolve();
 function serial(fn) {
   const run = queue.then(fn, fn);
@@ -98,7 +98,7 @@ function serial(fn) {
   return run;
 }
 
-// ---------- Verlauf je Datei für undo/redo ----------
+// ---------- History per file for undo/redo ----------
 const history = new Map(); // file -> { past, future, last }
 
 function remember(file, before, after) {
@@ -115,15 +115,15 @@ async function readXml(file) {
   try {
     return await fs.readFile(file, 'utf8');
   } catch (e) {
-    if (e.code === 'ENOENT') throw new Error(`Datei nicht gefunden: ${file} (neue Diagramme mit create_diagram anlegen)`);
+    if (e.code === 'ENOENT') throw new Error(`File not found: ${file} (create new diagrams with create_diagram)`);
     throw e;
   }
 }
 
 /**
- * Lädt die Datei in bpmn-js, ruft fn(exec) auf und schreibt das Ergebnis zurück, falls mutate gesetzt ist.
- * exec(method, params) ruft denselben Befehl auf wie der Live-Modus (graph, addElement, connect, ...).
- * Schlägt fn fehl, bleibt die Datei unverändert.
+ * Loads the file into bpmn-js, calls fn(exec) and writes the result back if mutate is set.
+ * exec(method, params) calls the same command as live mode (graph, addElement, connect, ...).
+ * If fn fails, the file stays unchanged.
  */
 export function withFile(file, fn, { mutate = false } = {}) {
   return serial(async () => {
@@ -135,7 +135,7 @@ export function withFile(file, fn, { mutate = false } = {}) {
       try {
         await s.page.evaluate((x, platform) => { window.__use(platform); return window.modeler.importXML(x).then(() => undefined); }, xml, platformOfXml(xml));
       } catch (e) {
-        throw new Error(`Datei konnte nicht geladen werden: ${cleanError(e).message}`);
+        throw new Error(`The file could not be loaded: ${cleanError(e).message}`);
       }
       s.file = file;
       s.xml = xml;
@@ -159,7 +159,7 @@ export function withFile(file, fn, { mutate = false } = {}) {
       }
       return result;
     } catch (e) {
-      s.file = null; // Diagramm im Browser ist evtl. halb geändert: beim nächsten Mal neu laden
+      s.file = null; // the diagram in the browser may be half changed: reload it next time
       throw e;
     }
   });
@@ -170,8 +170,8 @@ export function undoFile(file, redo = false) {
     const current = await readXml(file);
     const h = history.get(file);
     const from = redo ? h?.future : h?.past;
-    if (!h || h.last !== current) throw new Error('Kein Verlauf für diese Datei (in dieser Sitzung nicht geändert oder inzwischen außerhalb bearbeitet).');
-    if (!from.length) throw new Error(redo ? 'Nichts wiederherzustellen.' : 'Nichts rückgängig zu machen.');
+    if (!h || h.last !== current) throw new Error('No history for this file (not changed in this session, or edited elsewhere in the meantime).');
+    if (!from.length) throw new Error(redo ? 'Nothing to redo.' : 'Nothing to undo.');
     const xml = from.pop();
     (redo ? h.past : h.future).push(current);
     await fs.writeFile(file, xml, 'utf8');
@@ -183,7 +183,7 @@ export function undoFile(file, redo = false) {
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 export const PLATFORMS = ['camunda7', 'camunda8'];
-/** Plattform einer BPMN-Datei laut Dateikopf (wie das Plugin sie auch erkennt). */
+/** Platform of a BPMN file according to its header (detected the same way as in the plugin). */
 export function platformOfXml(xml) {
   const head = /<[\w:]*definitions[^>]*>/.exec(xml)?.[0] ?? '';
   const p = /modeler:executionPlatform="([^"]*)"/.exec(head)?.[1];
@@ -193,9 +193,9 @@ export function platformOfXml(xml) {
 export const DEFAULT_PLATFORM = PLATFORMS.includes(process.env.BPMN_MCP_PLATFORM) ? process.env.BPMN_MCP_PLATFORM : 'camunda8';
 
 /**
- * Leeres Diagramm für die gewählte Plattform.
- * Camunda 7: camunda-Namespace, executionPlatform "Camunda Platform", historyTimeToLive (ab 7.20 Pflicht beim Deployment).
- * executable: false erzeugt ein rein fachliches Modell (strategisch/operativ), das die Engine nicht deployt.
+ * Empty diagram for the chosen platform.
+ * Camunda 7: camunda namespace, executionPlatform "Camunda Platform", historyTimeToLive (required for deployment since 7.20).
+ * executable: false creates a purely business model (strategic/operational) that the engine does not deploy.
  */
 export const DEFAULT_VERSION = { camunda7: process.env.BPMN_MCP_C7_VERSION || '7.23.0', camunda8: process.env.BPMN_MCP_C8_VERSION || '8.8.0' };
 export function emptyDiagram(processId, name, { platform = DEFAULT_PLATFORM, executable = true, version } = {}) {
@@ -214,14 +214,14 @@ export function emptyDiagram(processId, name, { platform = DEFAULT_PLATFORM, exe
 `;
 }
 
-// ---------- Export: SVG -> PDF/PNG über denselben Headless-Browser (auch für UML-Diagramme) ----------
+// ---------- Export: SVG -> PDF/PNG via the same headless browser (also for UML diagrams) ----------
 function svgSize(svg) {
   const head = /<svg[^>]*>/.exec(svg)?.[0] ?? '';
   const w = /\swidth="([\d.]+)/.exec(head), h = /\sheight="([\d.]+)/.exec(head), vb = /viewBox="([-\d.]+)[ ,]+([-\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)"/.exec(head);
   return { width: Math.ceil(Number(w?.[1] ?? vb?.[3] ?? 800)), height: Math.ceil(Number(h?.[1] ?? vb?.[4] ?? 600)) };
 }
 
-/** Wandelt ein SVG in PDF (eine Seite, exakt so groß wie das Diagramm) oder PNG um. */
+/** Converts an SVG into a PDF (one page, exactly the size of the diagram) or a PNG. */
 export function renderSvg(svg, format, { margin = 20, scale = 2, maxSize } = {}) {
   return serial(async () => {
     const s = await openSession();

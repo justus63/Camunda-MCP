@@ -1,4 +1,4 @@
-// Rendert BPMN-XML mit echtem bpmn-js in Headless-Chrome zu einem PNG (zum Ansehen von Layout-Ergebnissen).
+// Renders BPMN XML with a real bpmn-js in headless Chrome to a PNG (for looking at layout results).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';

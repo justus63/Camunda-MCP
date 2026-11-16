@@ -10,25 +10,25 @@ await client.connect(new StdioClientTransport({ command: 'node', args: ['server.
 
 const call = async (name, args) => {
   const r = await client.callTool({ name, arguments: { file, ...args } });
-  console.log(r.isError ? 'FEHLER' : 'ok   ', name, '->', r.content[0].text.split('\n')[0]);
+  console.log(r.isError ? 'ERROR' : 'ok   ', name, '->', r.content[0].text.split('\n')[0]);
   if (r.isError) process.exitCode = 1;
   return r.content[0].text;
 };
 
 console.log('tools:', (await client.listTools()).tools.map((t) => t.name).join(', '));
-await call('create_diagram', { name: 'Bestellung' });
-await call('add_element', { type: 'startEvent', id: 'Start', name: 'Bestellung eingegangen' });
-await call('add_element', { type: 'serviceTask', id: 'Pruefen', name: 'Bestand prüfen', after: 'Start' });
-await call('update_element', { id: 'Pruefen', jobType: 'check-stock' });
-await call('add_element', { type: 'exclusiveGateway', id: 'GW', name: 'Verfügbar?', after: 'Pruefen' });
-await call('add_element', { type: 'userTask', id: 'Versand', name: 'Versenden', after: 'GW', flowName: 'ja' });
-await call('add_element', { type: 'endEvent', id: 'EndeOk', name: 'Fertig', after: 'Versand' });
-await call('add_element', { type: 'endEvent', id: 'EndeNok', name: 'Abgelehnt' });
-await call('connect', { source: 'GW', target: 'EndeNok', name: 'nein' });
+await call('create_diagram', { name: 'Order' });
+await call('add_element', { type: 'startEvent', id: 'Start', name: 'Order received' });
+await call('add_element', { type: 'serviceTask', id: 'Check', name: 'Check stock', after: 'Start' });
+await call('update_element', { id: 'Check', jobType: 'check-stock' });
+await call('add_element', { type: 'exclusiveGateway', id: 'GW', name: 'Available?', after: 'Check' });
+await call('add_element', { type: 'userTask', id: 'Ship', name: 'Ship order', after: 'GW', flowName: 'yes' });
+await call('add_element', { type: 'endEvent', id: 'EndOk', name: 'Order shipped', after: 'Ship' });
+await call('add_element', { type: 'endEvent', id: 'EndNok', name: 'Order rejected' });
+await call('connect', { source: 'GW', target: 'EndNok', name: 'no' });
 console.log('\n' + (await call('describe_diagram', {})));
 
 const xml = fs.readFileSync(file, 'utf8');
 console.log('\nBPMNShapes:', (xml.match(/<bpmndi:BPMNShape/g) || []).length, ' BPMNEdges:', (xml.match(/<bpmndi:BPMNEdge/g) || []).length);
-console.log('zeebe:taskDefinition vorhanden:', xml.includes('zeebe:taskDefinition'));
-console.log('Datei:', file);
+console.log('zeebe:taskDefinition present:', xml.includes('zeebe:taskDefinition'));
+console.log('File:', file);
 await client.close();

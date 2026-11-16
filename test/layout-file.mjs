@@ -1,4 +1,4 @@
-// Aufruf: node test/layout-file.mjs <ein.bpmn> <aus.bpmn> <aus.png>  – layoutet eine Datei neu, prüft und rendert sie.
+// Usage: node test/layout-file.mjs <in.bpmn> <out.bpmn> <out.png>  – re-lays out a file, checks and renders it.
 import fs from 'node:fs';
 import { BpmnModdle } from 'bpmn-moddle';
 import zeebe from 'zeebe-bpmn-moddle/resources/zeebe.json' with { type: 'json' };
@@ -15,5 +15,5 @@ const { xml } = await moddle.toXML(defs, { format: true });
 fs.writeFileSync(outp, xml);
 const { rootElement: d2 } = await moddle.fromXML(xml);
 const res = checkDiagram(graphFromDefinitions(d2));
-console.log(formatCheck({ ...res, problems: res.problems.filter((p) => /linie|ueberlapp|kreuz|beschrift|schraeg/.test(p.rule)) }));
+console.log(formatCheck({ ...res, problems: res.problems.filter((p) => /line|overlap|crossing|label|diagonal/.test(p.rule)) }));
 if (png) console.log(await renderPng(xml, png));

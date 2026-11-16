@@ -1,44 +1,44 @@
 # bpmn-mcp
 
-Ein MCP-Server, mit dem Claude BPMN-Diagramme für den **Camunda Modeler** (Camunda 8 und Camunda 7) zeichnen und bearbeiten kann – und dazu UML-Klassen- und Zustandsdiagramme (Domänenmodell, Objektlebenszyklus) erzeugt. Für Camunda 7 kann Claude die Modelle außerdem auf einer laufenden Process Engine deployen und Testläufe durchspielen (Aufgaben erledigen, Timer auslösen, Nachrichten senden, Instanzen ansehen).
+An MCP server that lets Claude draw and edit BPMN diagrams for **Camunda Modeler** (Camunda 8 and Camunda 7) – and generate UML class and state diagrams (domain model, object lifecycle). For Camunda 7, Claude can also deploy the models to a running process engine and walk through test runs (complete tasks, fire timers, send messages, inspect instances).
 
-Es gibt zwei Arbeitsweisen mit demselben Funktionsumfang, die sich kombinieren lassen:
+There are two ways of working with the same feature set, and they can be combined:
 
-| Modus | Was passiert | Braucht |
+| Mode | What happens | Requires |
 |---|---|---|
-| **Datei-Modus** | Claude bearbeitet `.bpmn`-Dateien direkt, ohne geöffneten Modeler. Ist die Datei im Modeler offen, fragt er anschließend, ob er sie neu laden soll. | MCP-Server + Google Chrome (oder Chromium/Edge) |
-| **Live-Modus** | Claude bearbeitet das im Modeler **gerade geöffnete** Diagramm. Änderungen erscheinen sofort, Undo/Redo funktioniert. | MCP-Server + Modeler-Plugin |
+| **File mode** | Claude edits `.bpmn` files directly, without an open Modeler. If the file is open in the Modeler, the Modeler asks whether to reload it. | MCP server + Google Chrome (or Chromium/Edge) |
+| **Live mode** | Claude edits the diagram **currently open** in the Modeler. Changes appear immediately, undo/redo works. | MCP server + Modeler plugin |
 
-## Voraussetzungen
+## Requirements
 
-- **Camunda Modeler** (Desktop) für den Live-Modus, getestet mit **5.52.0**. Unterstützt werden **Camunda-8-** (Zeebe) und **Camunda-7-Diagramme**; welche Plattform gilt, steht im Dateikopf (siehe „Plattformen“).
-- **Node.js** ab Version 20.10, getestet mit Node 22, inklusive `npm`.
-- **Google Chrome**, Chromium oder Microsoft Edge für den Datei-Modus. Der Server findet den Browser an den üblichen Orten; sonst die Umgebungsvariable `CHROME_PATH` auf die Programmdatei setzen. Der Browser läuft unsichtbar im Hintergrund und wird nach 10 Minuten ohne Aufruf beendet.
-- Ein **MCP-fähiger Client**, zum Beispiel Claude Code oder Claude Desktop.
-- Betriebssystem: getestet auf **macOS**. Linux und Windows sollten funktionieren, das Installationsskript ist aber nur für macOS (siehe Schritt 3 für die manuelle Installation).
-- **Kein Camunda-Cluster nötig** für Modellieren, Prüfen und Exportieren. Nur die `engine_*`-Tools brauchen eine laufende Camunda-7-Engine mit REST-API (z. B. eine Spring-Boot-Anwendung mit `camunda-bpm-spring-boot-starter-rest`).
+- **Camunda Modeler** (desktop) for live mode, tested with **5.52.0**. Both **Camunda 8** (Zeebe) and **Camunda 7** diagrams are supported; the platform is taken from the file header (see "Platforms").
+- **Node.js** 20.10 or later, tested with Node 22, including `npm`.
+- **Google Chrome**, Chromium or Microsoft Edge for file mode. The server looks for the browser in the usual places; otherwise set the `CHROME_PATH` environment variable to the executable. The browser runs invisibly in the background and is shut down after 10 minutes without calls.
+- An **MCP client**, for example Claude Code or Claude Desktop.
+- Operating system: tested on **macOS**. Linux and Windows should work, but the install script is macOS only (see step 3 for the manual installation).
+- **No Camunda cluster needed** for modeling, checking and exporting. Only the `engine_*` tools need a running Camunda 7 engine with REST API (e.g. a Spring Boot application with `camunda-bpm-spring-boot-starter-rest`).
 
-## Einrichtung
+## Setup
 
-### 1. Projekt holen und Abhängigkeiten installieren
+### 1. Get the project and install the dependencies
 
-Lege den Ordner an einen festen Ort, denn der Pfad kommt später in die MCP-Konfiguration. Dann im Projektordner:
+Put the folder in a permanent location, because its path goes into the MCP configuration later. Then, in the project folder:
 
 ```bash
 npm install
 ```
 
-Wichtig: Führe `npm install` **im Projektordner** aus und achte darauf, dass dort eine `package.json` liegt. Sonst sucht npm in übergeordneten Ordnern weiter und installiert Pakete an der falschen Stelle.
+Important: run `npm install` **in the project folder** and make sure there is a `package.json` there. Otherwise npm keeps searching in parent folders and installs packages in the wrong place.
 
-### 2. Server testen (optional)
+### 2. Test the server (optional)
 
 ```bash
 node test.js
 ```
 
-Das Skript legt ein Beispieldiagramm in einem Temp-Ordner an und prüft die wichtigsten Datei-Tools. Am Ende sollte `BPMNShapes: 6  BPMNEdges: 5` stehen, ohne eine Zeile mit `FEHLER`. Ausführlicher: `node test/file-full.mjs` (endet mit `alles ok`).
+The script creates an example diagram in a temp folder and exercises the most important file tools. At the end it should print `BPMNShapes: 6  BPMNEdges: 5`, without any line starting with `ERROR`. More thorough: `node test/file-full.mjs` (ends with `all ok`).
 
-### 3. Modeler-Plugin installieren (nur für den Live-Modus)
+### 3. Install the Modeler plugin (live mode only)
 
 **macOS:**
 
@@ -46,15 +46,15 @@ Das Skript legt ein Beispieldiagramm in einem Temp-Ordner an und prüft die wich
 ./install-plugin.sh
 ```
 
-**Manuell (alle Systeme):** Kopiere die beiden Dateien aus `plugin/` (`index.js` und `client.js`) in einen neuen Ordner `bpmn-mcp-bridge` innerhalb des Plugin-Verzeichnisses deines Modelers:
+**Manually (all systems):** copy the two files from `plugin/` (`index.js` and `client.js`) into a new folder `bpmn-mcp-bridge` inside your Modeler's plugin directory:
 
-| System | Plugin-Ordner |
+| System | Plugin folder |
 |---|---|
 | macOS | `~/Library/Application Support/camunda-modeler/resources/plugins/` |
 | Linux | `~/.config/camunda-modeler/resources/plugins/` |
 | Windows | `%APPDATA%\camunda-modeler\resources\plugins\` |
 
-Das Ergebnis sieht dann so aus:
+The result looks like this:
 
 ```
 plugins/
@@ -63,273 +63,278 @@ plugins/
     client.js
 ```
 
-**Danach den Camunda Modeler komplett beenden und neu starten.** Plugins werden nur beim Start geladen. Speichere vorher deine Diagramme.
+**Then quit Camunda Modeler completely and start it again.** Plugins are only loaded at startup. Save your diagrams first.
 
-### 4. Server bei Claude eintragen
+### 4. Register the server with Claude
 
 **Claude Code:**
 
 ```bash
-claude mcp add bpmn -- node /voller/pfad/zu/bpmn-mcp/server.js
+claude mcp add bpmn -- node /full/path/to/bpmn-mcp/server.js
 ```
 
-**Claude Desktop oder andere Clients** (in der MCP-Konfigurationsdatei des Clients):
+**Claude Desktop or other clients** (in the client's MCP configuration file):
 
 ```json
 {
   "mcpServers": {
     "bpmn": {
       "command": "node",
-      "args": ["/voller/pfad/zu/bpmn-mcp/server.js"]
+      "args": ["/full/path/to/bpmn-mcp/server.js"]
     }
   }
 }
 ```
 
-Der Pfad muss absolut sein. Danach den Client bzw. die Session neu starten.
+The path must be absolute. Then restart the client or session.
 
-### 5. Ausprobieren
+### 5. Try it out
 
-Öffne im Modeler ein Camunda-8- oder Camunda-7-Diagramm und frage Claude zum Beispiel:
+Open a Camunda 8 or Camunda 7 diagram in the Modeler and ask Claude, for example:
 
-> Prüf mit live_status, ob der Modeler verbunden ist, und füge nach dem Start-Event einen User Task „Antrag prüfen“ ein.
+> Check with live_status whether the Modeler is connected, then add a user task "Check application" after the start event.
 
-Für den Datei-Modus:
+For file mode:
 
-> Lege unter `/pfad/bestellung.bpmn` ein neues Diagramm an: Start, Service Task „Bestand prüfen“, Gateway „Verfügbar?“, danach zwei Enden.
+> Create a new diagram at `/path/order.bpmn`: start, service task "Check stock", gateway "Available?", then two ends.
 
-## Verfügbare Tools
+## Available tools
 
-**Live-Modus** (wirkt auf das im Modeler aktive Diagramm, alles per Undo rückgängig zu machen):
+**Live mode** (acts on the active diagram in the Modeler, everything can be undone):
 
-| Tool | Zweck |
+| Tool | Purpose |
 |---|---|
-| `live_status` | Verbindung und aktiven Tab prüfen (meldet auch ein veraltetes Plugin) |
-| `live_describe` | Elemente und Verbindungen mit IDs, Typ, Pool/Lane, Event-Typ, auch den Inhalt zugeklappter Teilprozesse (`plane`); mit `geometry: true` auch Positionen, mit `ids`/`region` nur einen Teil |
-| `live_add_element` | Element anlegen (siehe Elementtypen), optional verbunden (`after`), in Pool/Lane/Teilprozess (`parent`), angeheftet (`attachTo`) |
-| `live_connect` | Sequenzfluss, Nachrichtenfluss (zwischen Pools) oder Assoziation; Bedingung, Standardfluss |
-| `live_update_element` | Name, Typ, Event-Definition, Job-Typ, Bedingung, Schleifen-/Multi-Instanz-Markierung, Farbe, Dokumentation, Camunda-8-Eigenschaften |
-| `live_remove_element` | ein oder mehrere Elemente löschen |
-| `live_arrange` | wie mit der Maus: verschieben (auch in andere Lane), Größe, Wegpunkte, Beschriftung, ausrichten, verteilen |
-| `live_batch` | viele Änderungen in einem Aufruf; mit `layout: true` danach automatisch anordnen und prüfen |
-| `live_layout` | Diagramm nach den Modellierungskonventionen anordnen (ein Undo-Schritt); `only: "messageFlows"` verlegt nur die Nachrichtenflüsse neu, `poolOrder` legt die Pool-Reihenfolge fest |
-| `live_check` | Prüfung gegen die Konventionen: Darstellung, Benennung, Struktur, Nachrichtenflüsse, mögliche Deadlocks, Pflichtangaben der Plattform; mit `level` zusätzlich die Regeln der Modellebene; dazu bpmnlint mit den Regeln des Camunda Modelers (`lint`) |
-| `live_export` | aktives Diagramm als PDF, SVG oder PNG speichern; `plane` = eine Drill-down-Ebene, `includePlanes: true` = alle Ebenen als eigene Dateien |
-| `live_screenshot` | Bild des Diagramms, damit Claude das Ergebnis selbst ansehen kann; `ids`/`region` = vergrößerter Ausschnitt, `plane` = Drill-down-Ebene |
-| `live_undo`, `live_redo`, `live_save` | rückgängig, wiederherstellen, speichern |
+| `live_status` | check the connection and the active tab (also reports an outdated plugin) |
+| `live_describe` | elements and connections with IDs, type, pool/lane, event type, including the content of collapsed subprocesses (`plane`); with `geometry: true` also positions, with `ids`/`region` only a part |
+| `live_add_element` | create an element (see element types), optionally connected (`after`), inside a pool/lane/subprocess (`parent`), attached (`attachTo`) |
+| `live_connect` | sequence flow, message flow (between pools) or association; condition, default flow |
+| `live_update_element` | name, type, event definition, job type, condition, loop/multi-instance marker, color, documentation, platform properties |
+| `live_remove_element` | delete one or more elements |
+| `live_arrange` | as with the mouse: move (also into another lane), size, waypoints, label, align, distribute |
+| `live_batch` | many changes in one call; with `layout: true` the diagram is laid out and checked afterwards |
+| `live_layout` | lay out the diagram following the modeling conventions (one undo step); `only: "messageFlows"` only reroutes the message flows, `poolOrder` sets the order of the pools |
+| `live_check` | check against the conventions: layout, naming, structure, message flows, possible deadlocks, required platform properties; with `level` also the rules of the model level; plus bpmnlint with the rules of Camunda Modeler (`lint`) |
+| `live_export` | save the active diagram as PDF, SVG or PNG; `plane` = one drill-down plane, `includePlanes: true` = all planes as separate files |
+| `live_screenshot` | image of the diagram so Claude can look at the result itself; `ids`/`region` = enlarged crop, `plane` = drill-down plane |
+| `live_undo`, `live_redo`, `live_save` | undo, redo, save |
 
-**Datei-Modus** (Parameter `file` = absoluter Pfad, jede Änderung wird sofort gespeichert):
+**File mode** (parameter `file` = absolute path, every change is saved immediately):
 
-| Tool | Zweck | entspricht |
+| Tool | Purpose | Corresponds to |
 |---|---|---|
-| `create_diagram` | neue Datei anlegen (`platform: camunda8` oder `camunda7`, optional `platformVersion` wie `"7.20.0"`); mit `operations` wird das ganze Diagramm im selben Aufruf gebaut, angeordnet und geprüft | – |
-| `describe_diagram` | wie `live_describe` | `live_describe` |
-| `add_element`, `connect`, `update_element`, `remove_element` | dieselben Parameter wie im Live-Modus | `live_add_element` … |
-| `batch` | viele Änderungen in einem Aufruf; **alles oder nichts**: bei einem Fehler bleibt die Datei unverändert | `live_batch` |
-| `arrange` | manuell anordnen | `live_arrange` |
-| `relayout` | neu anordnen | `live_layout` |
-| `check_diagram` | Prüfung gegen die Konventionen, optional je Modellebene (`level`) | `live_check` |
-| `export_diagram` | Datei als PDF (eine Seite in Diagrammgröße), SVG oder PNG exportieren | `live_export` |
-| `screenshot_diagram` | Bild der Datei | `live_screenshot` |
-| `undo`, `redo` | Änderungen an der Datei zurücknehmen/wiederholen (bis zu 50 Schritte, nur innerhalb der laufenden Sitzung) | `live_undo`, `live_redo` |
+| `create_diagram` | create a new file (`platform: camunda8` or `camunda7`, optionally `platformVersion` such as `"7.20.0"`); with `operations` the whole diagram is built, laid out and checked in the same call | – |
+| `describe_diagram` | like `live_describe` | `live_describe` |
+| `add_element`, `connect`, `update_element`, `remove_element` | same parameters as in live mode | `live_add_element` … |
+| `batch` | many changes in one call; **all or nothing**: on an error the file stays unchanged | `live_batch` |
+| `arrange` | manual arrangement | `live_arrange` |
+| `relayout` | lay out again | `live_layout` |
+| `check_diagram` | check against the conventions, optionally per model level (`level`) | `live_check` |
+| `export_diagram` | export the file as PDF (one page the size of the diagram), SVG or PNG | `live_export` |
+| `screenshot_diagram` | image of the file | `live_screenshot` |
+| `undo`, `redo` | revert/repeat changes to the file (up to 50 steps, only within the current session) | `live_undo`, `live_redo` |
 
-Ändernde Datei-Tools ordnen danach automatisch neu an und melden Darstellungsprobleme. Mit `layout: false` bleibt die bisherige Anordnung, zum Beispiel nach `arrange`.
+Mutating file tools lay out the diagram again afterwards and report layout problems. With `layout: false` the current arrangement is kept, for example after `arrange`.
 
-Technisch öffnet der Datei-Modus die Datei in einem unsichtbaren bpmn-js und führt dort **denselben Plugin-Code** aus wie der Live-Modus. Deshalb gelten in beiden Modi dieselben Elementtypen, Eigenschaften und BPMN-Regeln.
+Under the hood, file mode opens the file in an invisible bpmn-js and runs **the same plugin code** as live mode. That is why both modes share the same element types, properties and BPMN rules.
 
-**Elementtypen (beide Modi):** `startEvent`, `endEvent`, `intermediateCatchEvent`, `intermediateThrowEvent`, `boundaryEvent`, `task`, `userTask`, `serviceTask`, `scriptTask`, `businessRuleTask`, `sendTask`, `receiveTask`, `manualTask`, `callActivity`, `subProcess`, `eventSubProcess`, `transaction`, `adHocSubProcess`, `exclusiveGateway`, `parallelGateway`, `inclusiveGateway`, `eventBasedGateway`, `complexGateway`, `dataObject`, `dataStore`, `textAnnotation`, `group`, `participant` (Pool, optional mit `lanes`), `lane`.
+**Element types (both modes):** `startEvent`, `endEvent`, `intermediateCatchEvent`, `intermediateThrowEvent`, `boundaryEvent`, `task`, `userTask`, `serviceTask`, `scriptTask`, `businessRuleTask`, `sendTask`, `receiveTask`, `manualTask`, `callActivity`, `subProcess`, `eventSubProcess`, `transaction`, `adHocSubProcess`, `exclusiveGateway`, `parallelGateway`, `inclusiveGateway`, `eventBasedGateway`, `complexGateway`, `dataObject`, `dataStore`, `textAnnotation`, `group`, `participant` (pool, optionally with `lanes`), `lane`.
 
-**Event-Definitionen** (`eventDefinition`):
+**Event definitions** (`eventDefinition`):
 
 ```json
 { "type": "timer", "timerType": "duration", "value": "P7D" }
-{ "type": "timer", "timerType": "date", "value": "= startDatum" }
-{ "type": "message", "name": "projekt_zugewiesen", "correlationKey": "= mitarbeiterId" }
+{ "type": "timer", "timerType": "date", "value": "= startDate" }
+{ "type": "message", "name": "project_assigned", "correlationKey": "= employeeId" }
 { "type": "signal" | "error" | "escalation", "name": "...", "code": "..." }
 { "type": "conditional", "value": "= x > 5" }
 { "type": "terminate" }   { "type": "compensate" }   { "type": "none" }
 ```
 
-**Zugeklappte Teilprozesse** (`expanded: false`) haben wie im Modeler eine eigene Drill-down-Ebene. Elemente mit `parent` = Teilprozess landen in dieser Ebene; Layout und Prüfung behandeln jede Ebene einzeln (Meldungen sind mit `[Ebene „…“]` markiert), `describe` kennzeichnet sie mit `plane`.
+**Collapsed subprocesses** (`expanded: false`) have their own drill-down plane, as in the Modeler. Elements with `parent` = subprocess go into that plane; layout and checks handle each plane separately (findings are marked with `[Plane "…"]`), `describe` tags them with `plane`.
 
-**Prozess-Eigenschaften** (`historyTimeToLive`, `versionTag`, `candidateStarterGroups`, `isExecutable`) setzt `update` mit der ID des Prozesses oder des Pools.
+**Process properties** (`historyTimeToLive`, `versionTag`, `candidateStarterGroups`, `isExecutable`) are set with `update` and the ID of the process or the pool.
 
-**Camunda 7 Process Engine** (REST-API, Standard `http://localhost:8080/engine-rest`, änderbar mit der Umgebungsvariable `CAMUNDA_URL` oder je Aufruf mit `engineUrl`; Basic Auth über `CAMUNDA_USER`/`CAMUNDA_PASSWORD`):
+**Camunda 7 process engine** (REST API, default `http://localhost:8080/engine-rest`, configurable with the `CAMUNDA_URL` environment variable or per call with `engineUrl`; basic auth via `CAMUNDA_USER`/`CAMUNDA_PASSWORD`):
 
-| Tool | Zweck |
+| Tool | Purpose |
 |---|---|
-| `engine_status` | Engine erreichbar? Deployte Prozesse und DMN-Tabellen, laufende Instanzen, Incidents |
-| `engine_deploy` | `.bpmn`, `.dmn`, `.form`, `.html` deployen (Standard: nur Geänderte) |
-| `engine_start_instance` | Instanz mit Variablen und Business Key starten; zeigt, wo sie danach wartet |
-| `engine_tasks` | offene User Tasks je Instanz, Bearbeiter, Gruppe oder Name, optional mit Formularfeldern |
-| `engine_complete_task` | Aufgabe per ID oder per Business Key + Name erledigen, optional als bestimmter Benutzer (claim) |
-| `engine_execute_jobs` | Timer und asynchrone Jobs einer Instanz sofort ausführen (Fristen im Testlauf überspringen) |
-| `engine_correlate_message` | Nachricht an wartende Ereignisse senden oder Instanz per Nachricht starten |
-| `engine_instance` | Zustand einer (auch beendeten) Instanz: Warteposition, Aufgaben, Timer, External Tasks, Incidents, Variablen, Verlauf |
-| `engine_incidents` | Incidents mit Fehlermeldung und Stacktrace-Anfang; `retry: true` setzt die Retries wieder auf 1 |
-| `engine_rest` | beliebiger REST-Aufruf für alles andere |
+| `engine_status` | Is the engine reachable? Deployed processes and DMN tables, running instances, incidents |
+| `engine_deploy` | deploy `.bpmn`, `.dmn`, `.form`, `.html` (default: only changed files) |
+| `engine_start_instance` | start an instance with variables and business key; shows where it waits afterwards |
+| `engine_tasks` | open user tasks per instance, assignee, group or name, optionally with form fields |
+| `engine_complete_task` | complete a task by ID or by business key + name, optionally as a specific user (claim) |
+| `engine_execute_jobs` | run the timers and asynchronous jobs of an instance immediately (skip deadlines in a test run) |
+| `engine_correlate_message` | send a message to waiting events or start an instance by message |
+| `engine_instance` | state of an instance (also finished ones): waiting position, tasks, timers, external tasks, incidents, variables, history |
+| `engine_incidents` | incidents with error message and the start of the stack trace; `retry: true` sets the retries back to 1 |
+| `engine_rest` | any REST call for everything else |
 
-Variablen werden als `{ name: wert }` übergeben; der Typ ergibt sich aus dem Wert (`true` → Boolean, `5` → Long, `1.5` → Double, Text → String, Objekt → Json) oder wird explizit angegeben (`{ "value": "2026-12-01T00:00:00.000+0100", "type": "Date" }`).
+Variables are passed as `{ name: value }`; the type follows from the value (`true` → Boolean, `5` → Long, `1.5` → Double, text → String, object → Json) or is given explicitly (`{ "value": "2026-12-01T00:00:00.000+0100", "type": "Date" }`).
 
-Ein Testlauf sieht dann zum Beispiel so aus:
+A test run might then look like this:
 
-> Deploy `dienstreise.bpmn` und `genehmigungsstellen.dmn`, starte eine Instanz für mara nach Berlin (320 €), lass henrik das Budget und ole die fachliche Prüfung genehmigen, löse die Timer aus und zeig mir den Verlauf.
+> Deploy `business-trip.bpmn` and `approvers.dmn`, start an instance for mara to Berlin (€320), let henrik approve the budget and ole the content check, fire the timers and show me the history.
 
-**UML** (unabhängig vom Modeler):
+**UML** (independent of the Modeler):
 
-| Tool | Zweck |
+| Tool | Purpose |
 |---|---|
-| `uml_class_diagram` | UML-Klassendiagramm (Domänenmodell) aus Klassen, Attributen und Beziehungen: ordnet automatisch an, verlegt die Beziehungen rechtwinklig, schreibt `.drawio` (XML), `.svg`, `.pdf`, `.png` und die Beschreibung als `.uml.json`; liefert ein Vorschaubild und fachliche Hinweise |
-| `uml_state_diagram` | UML-Zustandsdiagramm (Objektlebenszyklus) aus Zuständen und Übergängen, gleiche Ausgaben |
+| `uml_class_diagram` | UML class diagram (domain model) from classes, attributes and relations: arranges them automatically, routes the relations at right angles, writes `.drawio` (XML), `.svg`, `.pdf`, `.png` and the description as `.uml.json`; returns a preview image and modeling hints |
+| `uml_state_diagram` | UML state diagram (object lifecycle) from states and transitions, same outputs |
 
-## Plattformen: Camunda 8 und Camunda 7
+## Platforms: Camunda 8 and Camunda 7
 
-Die Plattform steht im Dateikopf (`modeler:executionPlatform`) und wird in beiden Modi automatisch erkannt. `create_diagram` legt mit `platform: "camunda7"` eine Camunda-7-Datei an (Standard ist `camunda8`; die Umgebungsvariable `BPMN_MCP_PLATFORM=camunda7` ändert den Standard). Im Live-Modus gilt die Plattform des geöffneten Tabs. Eigenschaften der jeweils anderen Plattform werden mit einer klaren Meldung abgelehnt.
+The platform is stored in the file header (`modeler:executionPlatform`) and detected automatically in both modes. `create_diagram` with `platform: "camunda7"` creates a Camunda 7 file (the default is `camunda8`; the environment variable `BPMN_MCP_PLATFORM=camunda7` changes the default). In live mode the platform of the open tab applies. Properties of the other platform are rejected with a clear message.
 
-**Camunda-8-Eigenschaften** (`properties`): `assignee`, `candidateGroups`, `candidateUsers`, `dueDate`, `formId`, `retries`, `calledProcessId`, `decisionId`, `resultVariable`, `script`, `inputs`/`outputs` (`[{source, target}]`), `headers`; dazu `jobType` und FEEL-Bedingungen (`= betrag > 500`).
+**Camunda 8 properties** (`properties`): `assignee`, `candidateGroups`, `candidateUsers`, `dueDate`, `formId`, `retries`, `calledProcessId`, `decisionId`, `resultVariable`, `script`, `inputs`/`outputs` (`[{source, target}]`), `headers`; plus `jobType` and FEEL conditions (`= amount > 500`).
 
-**Camunda-7-Eigenschaften** (`properties`):
+**Camunda 7 properties** (`properties`):
 
-| Element | Eigenschaften |
+| Element | Properties |
 |---|---|
-| User Task | `assignee`, `candidateGroups`, `candidateUsers`, `dueDate`, `followUpDate`, `priority`, Formular über `formKey` (Embedded Form, z. B. `embedded:app:forms/antrag.html`), `formRef` (Camunda Form) oder `formFields` (Generated Form), `taskListeners` |
-| Startereignis | `formKey` / `formRef` / `formFields`, `initiator` |
-| Service-, Send-, Business-Rule-Task, auslösendes Nachrichtenereignis | `class` (JavaDelegate), `delegateExpression` (Spring Bean), `expression` (+ `resultVariable`) oder `topic` (External Task) |
-| Business Rule Task | `decisionRef`, `resultVariable`, `mapDecisionResult` |
-| Script Task | `scriptFormat` (Standard `groovy`), `script` oder `resource`, `resultVariable` |
-| Call Activity | `calledElement` |
-| Prozess (ID des Pools oder Prozesses) | `historyTimeToLive`, `isExecutable`, `candidateStarterGroups`, `candidateStarterUsers`, `versionTag` |
-| alle | `asyncBefore`, `asyncAfter`, `inputs`/`outputs` (`[{name, value}]`), `executionListeners` |
+| User task | `assignee`, `candidateGroups`, `candidateUsers`, `dueDate`, `followUpDate`, `priority`, form via `formKey` (embedded form, e.g. `embedded:app:forms/request.html`), `formRef` (Camunda Form) or `formFields` (generated form), `taskListeners` |
+| Start event | `formKey` / `formRef` / `formFields`, `initiator` |
+| Service, send, business rule task, throwing message event | `class` (JavaDelegate), `delegateExpression` (Spring bean), `expression` (+ `resultVariable`) or `topic` (external task) |
+| Business rule task | `decisionRef`, `resultVariable`, `mapDecisionResult` |
+| Script task | `scriptFormat` (default `groovy`), `script` or `resource`, `resultVariable` |
+| Call activity | `calledElement` |
+| Process (ID of the pool or process) | `historyTimeToLive`, `isExecutable`, `candidateStarterGroups`, `candidateStarterUsers`, `versionTag` |
+| all | `asyncBefore`, `asyncAfter`, `inputs`/`outputs` (`[{name, value}]`), `executionListeners` |
 
-Bedingungen stehen in Camunda 7 als Expression (`${betrag > 500}`), Mehrfachinstanzen bekommen `loop: { type: "parallel", collection: "belege", elementVariable: "beleg" }` oder `cardinality`. Neue Camunda-7-Prozesse erhalten `historyTimeToLive="180"`, weil die Engine das Deployment seit 7.20 sonst ablehnt.
+In Camunda 7, conditions are expressions (`${amount > 500}`); multi-instances get `loop: { type: "parallel", collection: "receipts", elementVariable: "receipt" }` or `cardinality`. New Camunda 7 processes get `historyTimeToLive="180"`, because since 7.20 the engine rejects the deployment otherwise.
 
-Im Kollaborationsdiagramm ist nur der Pool der Process Engine ausführbar: `{ op: "add", type: "participant", name: "Process Engine", processId: "Process_Reise", executable: true, lanes: [...] }`, die übrigen Pools mit `executable: false`. Die technischen Prüfregeln gelten dann nur für diesen Pool.
+In a collaboration diagram only the process engine's pool is executable: `{ op: "add", type: "participant", name: "Process Engine", processId: "Process_Trip", executable: true, lanes: [...] }`, all other pools with `executable: false`. The technical check rules then only apply to that pool.
 
-**Datenobjekte:** `state: "genehmigt"` setzt den Zustand (sichtbar als „Name [genehmigt]“), `collection: true` markiert eine Liste.
+**Data objects:** `state: "approved"` sets the state (shown as "Name [approved]"), `collection: true` marks a list.
 
-## Layout und Konventionen
+## Layout and conventions
 
-`layout.js` ordnet Diagramme nach den Camunda-Best-Practices an (Grundlage: Vorlesung Business Engineering, „Modellierungskonventionen“):
+`layout.js` lays out diagrams following Camunda's best practices:
 
-- von links nach rechts, der Normalablauf liegt auf einer geraden Linie
-- Verzweigungen symmetrisch: gleichwertige Zweige ober- und unterhalb, Gateway mittig, Linien über die Gateway-Ecken
-- keine Linie durch ein Element; Rückschleifen laufen außen herum, innere Schleifen innen
-- Zweige bilden getrennte Bänder, dadurch möglichst keine Kreuzungen
-- Beschriftungen stehen frei (Antworten an den Gateway-Ausgängen, Gateway-Frage neben der Linie)
-- Pools, Lanes, aufgeklappte Teilprozesse, angeheftete Ereignisse, Datenobjekte und Anmerkungen werden mit angeordnet
+- left to right, the normal flow lies on a straight line
+- symmetric branches: equivalent branches above and below, gateway in the middle, lines leave via the gateway corners
+- no line through an element; loops run around the outside, inner loops inside
+- branches form separate bands, which avoids crossings where possible
+- labels stay clear (answers at the gateway's outgoing flows, the gateway question next to the line)
+- pools, lanes, expanded subprocesses, boundary events, data objects and annotations are laid out as well
 
-**Kollaborationsdiagramme** (mehrere ausmodellierte Pools):
+**Collaboration diagrams** (several expanded pools):
 
-- Die Pools werden so gestapelt, dass möglichst viele Nachrichtenflüsse zwischen Nachbarn laufen (die Process Engine landet zwischen den Pools, mit denen sie spricht). `poolOrder` überstimmt das.
-- Alle Pools teilen sich ein Spaltenraster. Sender und Empfänger einer Nachricht kommen nach Möglichkeit in dieselbe Spalte, der Nachrichtenfluss wird dann eine senkrechte Linie. Bei Schleifen über Poolgrenzen ist das nicht für jeden Fluss möglich.
-- Nachrichtenflüsse weichen Elementen und Beschriftungen aus: an einer freien Stelle des Elements heraus, sonst mit einem kurzen Versatz in eine freie Gasse, durch dazwischenliegende Pools nur an freien Stellen. Waagerechte Stücke liegen auf eigenen Spuren im Zwischenraum, der dafür bei Bedarf wächst.
-- Ereignisse mit einem Nachrichtenfluss nach unten bekommen ihre Beschriftung nach oben.
-- `only: "messageFlows"` (bei `relayout` / `live_layout`) verlegt nur die Nachrichtenflüsse neu. Elemente, Sequenzflüsse und von Hand gesetzte Positionen bleiben unverändert. Für weitere Änderungen nach einer manuellen Korrektur `layout: false` verwenden.
+- The pools are stacked so that as many message flows as possible run between neighbors (the process engine ends up between the pools it talks to). `poolOrder` overrides this.
+- All pools share one column grid. Sender and receiver of a message are put into the same column where possible, so the message flow becomes a vertical line. With loops across pool borders this is not possible for every flow.
+- Message flows avoid elements and labels: they leave the element at a free spot, otherwise with a short offset into a free lane, and cross pools in between only at free spots. Horizontal pieces lie on their own tracks in the gap between pools, which grows if needed.
+- Events with a message flow going down get their label at the top.
+- `only: "messageFlows"` (with `relayout` / `live_layout`) only reroutes the message flows. Elements, sequence flows and positions set by hand stay unchanged. Use `layout: false` for further changes after a manual correction.
 
-Im Test `test/collab-direct.mjs` (drei ausmodellierte Pools, 13 Nachrichtenflüsse) sinkt die Gesamtlänge der Nachrichtenflüsse gegenüber der unausgerichteten Anordnung von rund 10.500 auf 6.300 px und die Zahl der Kreuzungen von 37 auf 22.
+In the test `test/collab-direct.mjs` (three expanded pools, 13 message flows) the aligned layout makes the message flows considerably shorter than the unaligned one and reduces the number of crossings.
 
-`check.js` prüft dieselben Regeln und zusätzlich: Namensschema (Aufgabe = Objekt + Verb, Gateway = Frage, Ausgänge = Antworten), explizite und symmetrische Gateways, gleiche Aufgabengröße, fehlende Start-/Endereignisse, Nachrichtenflüsse (nur an Tasks und Nachrichtenereignissen, Send/Receive mit Fluss, höchstens einer je Task), das ereignisbasierte Gateway, mögliche Deadlocks (XOR-Verzweigung, die parallel zusammengeführt wird) und fehlende Synchronisation sowie die Pflichtangaben der Plattform für ausführbare Prozesse. Am Ende steht eine Liste der verwendeten Konstrukte.
+`check.js` checks the same rules and additionally: naming patterns (task = verb + object, gateway = question, outgoing flows = answers), explicit and symmetric gateways, equal task size, missing start/end events, message flows (only at tasks and message events, send/receive with a flow, at most one per task), the event-based gateway, possible deadlocks (XOR split merged in parallel) and missing synchronization, as well as the required platform properties of executable processes. At the end there is a list of the constructs used.
 
-Mit `level` kommen die Empfehlungen der Modellebene dazu:
+With `level`, the recommendations of the model level are added:
 
-| `level` | prüft zusätzlich |
+| `level` | additionally checks |
 |---|---|
-| `strategisch` | höchstens 10 Schritte, abstrakte Tasks ohne Typ und Marker, keine inklusiven/komplexen/ereignisbasierten Gateways, wenige Gateways und Zwischenereignisse, ein Pool mit Lanes, Datenobjekte statt Nachrichtenflüssen; technische Angaben werden nicht verlangt |
-| `operativ` | mehrere ausmodellierte Pools mit Nachrichtenaustausch, Datenfluss vorhanden, typisierte Tasks im Pool der Process Engine; technische Angaben werden nicht verlangt |
-| `technisch` | mindestens ein ausführbarer Prozess, alle Pflichtangaben der Plattform |
+| `strategic` | at most 10 steps, abstract tasks without type and markers, no inclusive/complex/event-based gateways, few gateways and intermediate events, one pool with lanes, data objects instead of message flows; technical properties are not required |
+| `operational` | several expanded pools that exchange messages, data flow present, typed tasks in the process engine's pool; technical properties are not required |
+| `technical` | at least one executable process, all required platform properties |
 
-## UML-Diagramme
+The German level names `strategisch`, `operativ` and `technisch` from earlier versions are still accepted.
 
-`uml.js` erzeugt Diagramme aus einer Beschreibung, ohne Modeler und ohne weitere Programme:
+## UML diagrams
+
+`uml.js` generates diagrams from a description, without the Modeler and without any other programs:
 
 ```json
 {
-  "file": "/pfad/domaenenmodell",
-  "title": "Domänenmodell",
+  "file": "/path/domain-model",
+  "title": "Domain model",
   "classes": [
-    { "name": "Leser", "attributes": ["ausweisnummer: Text"] },
-    { "name": "Ausleihe", "attributes": ["ausgeliehenAm: Datum"] }
+    { "name": "Reader", "attributes": ["cardNumber: Text"] },
+    { "name": "Loan", "attributes": ["loanedOn: Date"] }
   ],
   "relations": [
-    { "from": "Leser", "to": "Ausleihe", "name": "tätigt", "fromMult": "1", "toMult": "0..*" }
+    { "from": "Reader", "to": "Loan", "name": "makes", "fromMult": "1", "toMult": "0..*" }
   ]
 }
 ```
 
-- Beziehungstypen: `association`, `aggregation`, `composition` (`from` ist das Ganze), `generalization` (`from` ist die Unterklasse), `dependency`; dazu `fromRole`/`toRole` und `navigable`.
-- Die Klassen werden in einem Raster so angeordnet, dass Beziehungen kurz bleiben, sich wenig kreuzen und Unterklassen unter ihrer Oberklasse stehen. `col`/`row` an einer Klasse legen ihre Zelle fest.
-- Geschrieben werden `<file>.drawio` (in diagrams.net weiterbearbeitbar), `.svg`, `.pdf`, `.png` und `.uml.json` (die Beschreibung; zum Ändern anpassen und das Tool erneut aufrufen).
-- Hinweise nach den Regeln für Domänenmodelle: keine Methoden, Attribute mit Typ, Klassen nicht als Attributtyp, Assoziationen benannt und mit Kardinalitäten, keine unverbundenen Klassen.
+- Relation types: `association`, `aggregation`, `composition` (`from` is the whole), `generalization` (`from` is the subclass), `dependency`; plus `fromRole`/`toRole` and `navigable`.
+- The classes are arranged in a grid so that relations stay short, cross little and subclasses sit below their superclass. `col`/`row` on a class pin its cell.
+- Written files: `<file>.drawio` (editable in diagrams.net), `.svg`, `.pdf`, `.png` and `.uml.json` (the description; adjust it and call the tool again to make changes).
+- Hints following the rules for domain models: no methods, attributes with a type, no classes as attribute types, associations named and with multiplicities, no unconnected classes.
 
-`uml_state_diagram` nimmt `states`, `initial`, `finals` und `transitions` (`from`, `to`, `label`) und nutzt für die Anordnung dieselbe Layout-Engine wie die BPMN-Diagramme.
+`uml_state_diagram` takes `states`, `initial`, `finals` and `transitions` (`from`, `to`, `label`) and uses the same layout engine as the BPMN diagrams.
 
-## So funktioniert die Live-Brücke
+## How the live bridge works
 
 ```
-Claude ──stdio──> MCP-Server (server.js) <──WebSocket 127.0.0.1:17877── Plugin im Modeler ──> bpmn-js
+Claude ──stdio──> MCP server (server.js) <──WebSocket 127.0.0.1:17877── plugin in the Modeler ──> bpmn-js
 ```
 
-- Der MCP-Server öffnet lokal einen WebSocket-Server. Das Plugin im Modeler verbindet sich dorthin und wiederholt das alle 3 Sekunden, falls der Server noch nicht läuft.
-- Der Server lauscht nur auf `127.0.0.1`. Verbindungen von Webseiten (Origin `http://` oder `https://`) werden abgelehnt.
-- Der Port ist standardmäßig `17877`. Du kannst ihn mit der Umgebungsvariable `BPMN_MCP_PORT` ändern und musst dann `PORT` am Anfang von `plugin/client.js` auf denselben Wert setzen und das Plugin neu installieren.
-- Läuft der Server mehrfach (zum Beispiel in zwei Claude-Sessions), kann nur eine Instanz den Port belegen. Die anderen melden das auf stderr und bieten dann nur den Datei-Modus.
+- The MCP server opens a local WebSocket server. The plugin in the Modeler connects to it and retries every 3 seconds if the server is not running yet.
+- The server only listens on `127.0.0.1`. Connections from web pages (origin `http://` or `https://`) are rejected.
+- The default port is `17877`. You can change it with the `BPMN_MCP_PORT` environment variable; then also set `PORT` at the top of `plugin/client.js` to the same value and reinstall the plugin.
+- If the server runs several times (for example in two Claude sessions), only one instance can take the port. The others report this on stderr and then only offer file mode.
 
-## Fehlerbehebung
+## Troubleshooting
 
-**`live_status` meldet „Modeler nicht verbunden“**
-- Wurde der Modeler nach der Plugin-Installation **komplett** beendet und neu gestartet?
-- Liegt das Plugin im richtigen Ordner (siehe Schritt 3) und enthält `index.js` und `client.js` direkt im Ordner `bpmn-mcp-bridge`?
-- Läuft der MCP-Server, also ist er im Client eingetragen und die Session neu gestartet?
-- Ist der Port `17877` frei? Prüfen mit `lsof -nP -iTCP:17877` (macOS/Linux).
-- Details liefert die Konsole des Modelers (F12, Reiter „Console“).
+**`live_status` reports "Camunda Modeler is not connected"**
+- Did you quit the Modeler **completely** after installing the plugin and start it again?
+- Is the plugin in the right folder (see step 3), with `index.js` and `client.js` directly inside `bpmn-mcp-bridge`?
+- Is the MCP server running, i.e. registered in the client and the session restarted?
+- Is port `17877` free? Check with `lsof -nP -iTCP:17877` (macOS/Linux).
+- The Modeler's console has details (F12, "Console" tab).
 
-**„Kein BPMN-Diagramm im aktiven Tab“**
-Der aktive Tab muss ein BPMN-Diagramm sein, kein DMN- oder Formular-Tab.
+**`live_status` warns that the plugin is outdated**
+Run `./install-plugin.sh` (or copy the plugin files again) and restart the Modeler.
 
-**Änderung per Datei-Tool erscheint nicht**
-Der Modeler fragt nach dem Neuladen, wenn er wieder den Fokus bekommt. Für sofortige Änderungen den Live-Modus nutzen.
+**"No BPMN diagram in the active tab"**
+The active tab must be a BPMN diagram, not a DMN or form tab.
 
-**Datei-Modus meldet „braucht Google Chrome, Chromium oder Edge“**
-Browser installieren oder `CHROME_PATH` setzen, zum Beispiel in der MCP-Konfiguration: `claude mcp add bpmn -e CHROME_PATH=/pfad/zu/chrome -- node /voller/pfad/zu/bpmn-mcp/server.js`.
+**A change made with a file tool does not show up**
+The Modeler asks about reloading when it gets the focus again. Use live mode for immediate changes.
 
-**`npm install` verändert Dateien außerhalb des Projekts**
-Siehe Hinweis in Schritt 1: Es muss eine `package.json` im Projektordner liegen.
+**File mode reports "needs Google Chrome, Chromium or Edge"**
+Install a browser or set `CHROME_PATH`, for example in the MCP configuration: `claude mcp add bpmn -e CHROME_PATH=/path/to/chrome -- node /full/path/to/bpmn-mcp/server.js`.
 
-## Grenzen
+**`npm install` changes files outside the project**
+See the note in step 1: there must be a `package.json` in the project folder.
 
-- Die `engine_*`-Tools sprechen nur die Camunda-7-REST-API an (keine Camunda-8-/Zeebe-Cluster).
-- Camunda 7 und 8 lassen sich nicht in einer Datei mischen. DMN-Tabellen, Formulare (`.form`, HTML) und Java-Klassen legt der Server nicht an; er trägt nur die Verweise darauf ein.
-- UML: Klassen- und Zustandsdiagramme. Die `.drawio`-Datei wurde nicht in diagrams.net geöffnet geprüft, sondern nur auf ihren Aufbau; maßgeblich für das Aussehen sind SVG/PDF/PNG.
-- Die Deadlock-Prüfung ist eine Heuristik über den nächsten gemeinsamen Verzweigungspunkt. Sie ersetzt kein Durchspielen des Tokenflusses.
-- Datei-Modus: Undo/Redo gilt nur für Änderungen der laufenden Sitzung. Wird die Datei zwischendurch außerhalb geändert, beginnt der Verlauf neu.
-- Datei-Modus: Der erste Aufruf dauert ein bis zwei Sekunden, weil der Browser startet.
-- `live_layout` ordnet ohne `only: "messageFlows"` immer das ganze Diagramm neu an; einzelne Elemente lassen sich nicht festhalten. Elemente in aufgeklappten Teilprozessen werden innerhalb des Teilprozesses angeordnet und nicht spaltengenau an Nachrichtenpartnern ausgerichtet. Verschachtelte Lanes (Lane in Lane) werden nicht angeordnet. Zugeklappte Teilprozesse werden in ihrer eigenen Drill-down-Ebene angeordnet.
-- Nicht enthalten: Kopieren/Einfügen, DMN- und Formular-Editor, Deployment auf Camunda 8.
-- Die Plugin-Schnittstelle des Modelers ist laut Camunda-Doku **nicht stabil**. Nach einem Modeler-Update kann das Plugin angepasst werden müssen.
+## Limitations
+
+- The `engine_*` tools only talk to the Camunda 7 REST API (no Camunda 8/Zeebe clusters).
+- Camunda 7 and 8 cannot be mixed in one file. The server does not create DMN tables, forms (`.form`, HTML) or Java classes; it only adds the references to them.
+- UML: class and state diagrams. The `.drawio` file has only been checked for its structure, not opened in diagrams.net; SVG/PDF/PNG are authoritative for the look.
+- The deadlock check is a heuristic based on the nearest common split point. It does not replace simulating the token flow.
+- File mode: undo/redo only covers changes of the current session. If the file is changed elsewhere in between, the history starts over.
+- File mode: the first call takes one or two seconds because the browser starts.
+- Without `only: "messageFlows"`, `live_layout` always lays out the whole diagram; single elements cannot be pinned. Elements in expanded subprocesses are laid out inside the subprocess and not aligned column by column with their message partners. Nested lanes (lane in lane) are not laid out. Collapsed subprocesses are laid out in their own drill-down plane.
+- Not included: copy/paste, DMN and form editors, deployment to Camunda 8.
+- According to the Camunda docs, the Modeler's plugin API is **not stable**. The plugin may need adjustments after a Modeler update.
 
 ## Tests
 
-- `npm test`: Datei-Modus (`test.js`, `test/file-full.mjs`), Live-Modus gegen ein echtes bpmn-js in Headless-Chrome, Camunda 7 (`test/c7-direct.mjs`, `test/c7-file.mjs`), Kollaborations-Layout (`test/collab-direct.mjs`), UML (`test/uml.mjs`), Drill-down-Ebenen, bpmnlint und weitere Verbesserungen aus dem Dienstreise-Projekt (`test/projekt-fixes.mjs`) sowie die Engine-Tools gegen eine nachgebildete REST-API (`test/engine-mock.mjs`). Braucht Google Chrome (anderer Pfad über `CHROME_PATH`), aber keinen Camunda Modeler.
-- Die Tests mit `[ausgabe-präfix]` bzw. `[ausgabe-ordner]` als Argument schreiben ihre Ergebnisse (BPMN, PNG, PDF) zum Ansehen dorthin.
-- `node test/layout-file.mjs ein.bpmn aus.bpmn aus.png`: eine Datei neu anordnen, prüfen und als Bild rendern.
-- `node test-live.js <geöffnete.bpmn>`: Live-Modus im echten Modeler. **Achtung:** Der Test ändert und speichert diese Datei. Nimm also eine Kopie.
+- `npm test`: file mode (`test.js`, `test/file-full.mjs`), live mode against a real bpmn-js in headless Chrome, Camunda 7 (`test/c7-direct.mjs`, `test/c7-file.mjs`), collaboration layout (`test/collab-direct.mjs`), UML (`test/uml.mjs`), drill-down planes, bpmnlint, cropped screenshots and other features (`test/project-fixes.mjs`) and the engine tools against a mocked REST API (`test/engine-mock.mjs`). Needs Google Chrome (other path via `CHROME_PATH`), but no Camunda Modeler.
+- Tests that take `[output-prefix]` or `[output-folder]` as an argument write their results (BPMN, PNG, PDF) there for inspection.
+- `node test/layout-file.mjs in.bpmn out.bpmn out.png`: re-lay out a file, check it and render it as an image.
+- `node test-live.js <open.bpmn>`: live mode in the real Modeler. **Caution:** the test changes and saves this file, so use a copy of `example.bpmn`.
 
-## Projektstruktur
+## Project structure
 
 ```
-server.js            MCP-Server (Live-Tools, Datei-Tools, WebSocket-Brücke)
-headless.js          Datei-Modus: unsichtbares bpmn-js mit dem Plugin-Code, Undo-Verlauf
-layout.js            Layout-Engine nach den Modellierungskonventionen
-check.js             Prüfung gegen die Konventionen, Modellebenen, Plattform-Pflichtangaben
-lint.js              bpmnlint mit den Regeln des Camunda Modelers (camunda-compat je Plattform/Version)
-engine.js            Camunda-7-REST-Client für die engine_*-Tools
-uml.js               UML-Klassen- und Zustandsdiagramme (SVG und draw.io-XML)
-model.js             Brücke zwischen bpmn-moddle und Layout/Prüfung (für test/layout-file.mjs)
-plugin/index.js      Plugin-Manifest für den Modeler
-plugin/client.js     Plugin-Code, läuft im Modeler und im Datei-Modus
-install-plugin.sh    Plugin-Installation (macOS)
-test.js              Test für den Datei-Modus
-test-live.js         Test für den Live-Modus im echten Modeler
-test/                Tests mit bpmn-js in Headless-Chrome, Render-Werkzeug
-beispiel.bpmn        Beispieldiagramm
+server.js            MCP server (live tools, file tools, WebSocket bridge)
+headless.js          file mode: invisible bpmn-js with the plugin code, undo history
+layout.js            layout engine following the modeling conventions
+check.js             checks against the conventions, model levels, required platform properties
+lint.js              bpmnlint with the rules of Camunda Modeler (camunda-compat per platform/version)
+engine.js            Camunda 7 REST client for the engine_* tools
+uml.js               UML class and state diagrams (SVG and draw.io XML)
+model.js             bridge between bpmn-moddle and layout/check (for test/layout-file.mjs)
+plugin/index.js      plugin manifest for the Modeler
+plugin/client.js     plugin code, runs in the Modeler and in file mode
+install-plugin.sh    plugin installation (macOS)
+test.js              test for file mode
+test-live.js         test for live mode in the real Modeler
+test/                tests with bpmn-js in headless Chrome, render tool
+example.bpmn         example diagram
 ```

@@ -1,5 +1,5 @@
-// bpmnlint mit denselben Regeln wie der Camunda Modeler: bpmnlint:recommended + camunda-compat für Plattform und Version
-// aus dem Dateikopf (modeler:executionPlatform / executionPlatformVersion). Nicht ausführbare Prozesse prüft camunda-compat nicht.
+// bpmnlint with the same rules as Camunda Modeler: bpmnlint:recommended + camunda-compat for the platform and version
+// from the file header (modeler:executionPlatform / executionPlatformVersion). camunda-compat does not check non-executable processes.
 import { createRequire } from 'node:module';
 import { BpmnModdle } from 'bpmn-moddle';
 import { Linter } from 'bpmnlint';
@@ -10,7 +10,7 @@ const camundaModdle = require('camunda-bpmn-moddle/resources/camunda.json');
 const zeebeModdle = require('zeebe-bpmn-moddle/resources/zeebe.json');
 const compat = require('bpmnlint-plugin-camunda-compat');
 
-// Passende camunda-compat-Konfiguration: höchste verfügbare Version ≤ Zielversion (sonst die niedrigste).
+// Matching camunda-compat configuration: highest available version ≤ target version (otherwise the lowest).
 export function compatConfig(xml) {
   const head = /<[\w:]*definitions[^>]*>/.exec(xml)?.[0] ?? '';
   const platform = /modeler:executionPlatform="([^"]*)"/.exec(head)?.[1] ?? '';
@@ -30,7 +30,7 @@ export function compatConfig(xml) {
 
 export async function lintXml(xml) {
   const cfg = compatConfig(xml);
-  // camunda- und zeebe-Erweiterung zusammen kollidieren (modelerTemplate doppelt definiert): nur die passende laden.
+  // The camunda and zeebe extensions collide when loaded together (modelerTemplate defined twice): only load the matching one.
   const moddle = new BpmnModdle(cfg?.startsWith('camunda-cloud') ? { zeebe: zeebeModdle } : { camunda: camundaModdle });
   const { rootElement, warnings } = await moddle.fromXML(xml, 'bpmn:Definitions');
   const linter = new Linter({
@@ -49,14 +49,14 @@ export async function lintXml(xml) {
 }
 
 export function formatLint({ config, problems }) {
-  const label = { error: 'FEHLER', warning: 'WARNUNG', hint: 'HINWEIS' };
-  const head = `bpmnlint (${config ? `Engine-Regeln camunda-compat/${config} wie im Camunda Modeler + ` : ''}Best Practices bpmnlint:recommended): `;
-  if (!problems.length) return `${head}keine Meldungen.`;
+  const label = { error: 'ERROR', warning: 'WARNING', hint: 'HINT' };
+  const head = `bpmnlint (${config ? `engine rules camunda-compat/${config} as in Camunda Modeler + ` : ''}best practices bpmnlint:recommended): `;
+  if (!problems.length) return `${head}no findings.`;
   const order = { error: 0, warning: 1, hint: 2 };
   const count = (s) => problems.filter((p) => p.severity === s).length;
   return [
-    `${head}${count('error')} Fehler, ${count('warning')} Warnungen, ${count('hint')} Hinweise`,
+    `${head}${count('error')} errors, ${count('warning')} warnings, ${count('hint')} hints`,
     ...[...problems].sort((a, b) => order[a.severity] - order[b.severity]).slice(0, 40).map((p) => `[${label[p.severity]}] ${p.rule}: ${p.message}`),
-    ...(problems.length > 40 ? [`… und ${problems.length - 40} weitere.`] : []),
+    ...(problems.length > 40 ? [`… and ${problems.length - 40} more.`] : []),
   ].join('\n');
 }

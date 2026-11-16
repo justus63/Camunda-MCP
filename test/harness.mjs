@@ -1,4 +1,4 @@
-// Startet MCP-Server (eigener Port) + Headless-Chrome mit echtem bpmn-js-Modeler und dem Plugin.
+// Starts the MCP server (own port) + headless Chrome with a real bpmn-js modeler and the plugin.
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -40,7 +40,7 @@ export async function startLive(xml = EMPTY, port = 17999) {
   const call = async (name, args = {}, quiet) => {
     const r = await client.callTool({ name, arguments: args });
     const text = r.content.find((c) => c.type === 'text')?.text ?? '';
-    if (!quiet || r.isError) console.log(r.isError ? 'FEHLER' : 'ok    ', name, text.length > 400 ? text.slice(0, 400) + ' …' : text);
+    if (!quiet || r.isError) console.log(r.isError ? 'ERROR ' : 'ok    ', name, text.length > 400 ? text.slice(0, 400) + ' …' : text);
     return { ...r, text };
   };
   for (let i = 0; i < 40; i++) { if (!(await client.callTool({ name: 'live_status', arguments: {} })).isError) break; await new Promise((r) => setTimeout(r, 250)); }

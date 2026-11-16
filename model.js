@@ -1,4 +1,4 @@
-// Brücke zwischen bpmn-moddle (Datei-Modus) und dem Graphen für layout.js / check.js.
+// Bridge between bpmn-moddle and the graph used by layout.js / check.js.
 const SIZES = {
   StartEvent: [36, 36], EndEvent: [36, 36], IntermediateCatchEvent: [36, 36], IntermediateThrowEvent: [36, 36], BoundaryEvent: [36, 36],
   DataObjectReference: [36, 50], DataStoreReference: [50, 50], TextAnnotation: [100, 30], Group: [300, 300], Participant: [600, 250], Lane: [570, 125],
@@ -34,7 +34,7 @@ function mainDiagram(definitions) {
   return (definitions.diagrams ?? []).find((d) => /bpmn:(Process|Collaboration)$/.test(d.plane?.bpmnElement?.$type ?? ''));
 }
 
-// Liefert { nodes, edges, refs } – refs: id -> moddle-Element
+// Returns { nodes, edges, refs } – refs: id -> moddle element
 export function graphFromDefinitions(definitions) {
   const di = new Map();
   for (const e of mainDiagram(definitions)?.plane?.planeElement ?? []) if (e.bpmnElement) di.set(e.bpmnElement.id, e);
@@ -113,7 +113,7 @@ export function graphFromDefinitions(definitions) {
   return { nodes, edges, refs };
 }
 
-// Schreibt das Layout als BPMN-DI zurück (vorhandene DI-Objekte bleiben erhalten, z. B. Farben).
+// Writes the layout back as BPMN DI (existing DI objects are kept, e.g. colors).
 export function writeDi(moddle, definitions, graph, layout) {
   let diagram = mainDiagram(definitions);
   const root = definitions.rootElements.find((r) => r.$type === 'bpmn:Collaboration') ?? definitions.rootElements.find((r) => r.$type === 'bpmn:Process');

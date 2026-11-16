@@ -3,12 +3,12 @@
   "version": "0.6.0",
   "main": "index.js",
   "scripts": {
-    "test": "node test.js && node test/file-full.mjs && node test/live-basic.mjs && node test/live-pools.mjs && node test/c7-direct.mjs && node test/collab-direct.mjs && node test/c7-file.mjs && node test/uml.mjs && node test/projekt-fixes.mjs && node test/engine-mock.mjs"
+    "test": "node test.js && node test/file-full.mjs && node test/live-basic.mjs && node test/live-pools.mjs && node test/c7-direct.mjs && node test/collab-direct.mjs && node test/c7-file.mjs && node test/uml.mjs && node test/project-fixes.mjs && node test/engine-mock.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "MCP-Server für BPMN-Diagramme im Camunda Modeler (Camunda 8 und 7) und UML-Klassen-/Zustandsdiagramme",
+  "description": "MCP server for BPMN diagrams in Camunda Modeler (Camunda 8 and 7) and UML class/state diagrams",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

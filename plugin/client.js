@@ -1,10 +1,10 @@
-/* Läuft im Renderer des Camunda Modelers (kein Node, kein Bundler nötig).
- * - fängt über ein bpmn-js-Modul die Modeler-Instanzen aller Tabs ab
- * - verbindet sich per WebSocket mit dem MCP-Server (ws://127.0.0.1:PORT)
- * - führt dessen Befehle über bpmn-js "modeling" aus, d. h. mit Undo/Redo
+/* Runs in the renderer of Camunda Modeler (no Node, no bundler needed).
+ * - captures the modeler instances of all tabs through a bpmn-js module
+ * - connects to the MCP server via WebSocket (ws://127.0.0.1:PORT)
+ * - executes its commands through bpmn-js "modeling", i.e. with undo/redo
  */
 (function () {
-  var VERSION = 6;
+  var VERSION = 7;
   var PORT = window.__BPMN_MCP_PORT || 17877;
   var URL = 'ws://127.0.0.1:' + PORT;
 
@@ -14,7 +14,7 @@
   var activeTab = null;
   var api = { triggerAction: null };
 
-  // ---------- Instanzen sammeln ----------
+  // ---------- Collect instances ----------
   function Capture(injector, eventBus) {
     injectors.push(injector);
     eventBus.on('diagram.destroy', function () {
@@ -28,7 +28,7 @@
     plugin: { __init__: ['mcpBridgeCapture'], mcpBridgeCapture: ['type', Capture] },
   });
 
-  // ---------- Client-Plugin (liefert subscribe/triggerAction) ----------
+  // ---------- Client plugin (provides subscribe/triggerAction) ----------
   function Bridge(props) {
     if (!api.triggerAction) {
       api.triggerAction = props.triggerAction;
@@ -39,7 +39,7 @@
   }
   window.plugins.push({ type: 'client', plugin: Bridge });
 
-  // ---------- aktive Instanz ----------
+  // ---------- Active instance ----------
   function visible(injector) {
     try {
       var c = injector.get('canvas').getContainer();
@@ -52,11 +52,11 @@
   }
   function need() {
     var inj = active();
-    if (!inj) throw new Error('Kein BPMN-Diagramm im aktiven Tab (oder Tab ist kein BPMN).');
+    if (!inj) throw new Error('No BPMN diagram in the active tab (or the tab is not BPMN).');
     return inj;
   }
 
-  // ---------- Typen ----------
+  // ---------- Types ----------
   var X = { isExpanded: true };
   var TYPES = {
     startEvent: 'bpmn:StartEvent', endEvent: 'bpmn:EndEvent', task: 'bpmn:Task',
@@ -81,19 +81,19 @@
   function clean(o) { Object.keys(o).forEach(function (k) { if (o[k] === undefined || o[k] === null || o[k] === false) delete o[k]; }); return o; }
   function short(t) { return t.replace('bpmn:', ''); }
   function isA(e, t) { return e.businessObject && e.businessObject.$instanceOf(t); }
-  // Hauptebene (Prozess/Kollaboration) – auch wenn im Modeler gerade ein zugeklappter Teilprozess geöffnet ist.
+  // Main level (process/collaboration) – even if a collapsed subprocess is currently open in the Modeler.
   function rootOf(inj) {
     var c = inj.get('canvas'), rs = c.getRootElements ? c.getRootElements() : [c.getRootElement()];
     return rs.filter(function (r) { return r.businessObject && !isA(r, 'bpmn:SubProcess'); })[0] || c.getRootElement();
   }
-  // Drill-down-Ebene eines zugeklappten Teilprozesses (bpmn-js legt sie als eigenes Root "<id>_plane" an).
+  // Drill-down plane of a collapsed subprocess (bpmn-js creates it as a separate root "<id>_plane").
   function planeOf(inj, e) {
     if (!e || !isA(e, 'bpmn:SubProcess') || (e.di && e.di.isExpanded) || e.parent === undefined) return null;
     return inj.get('elementRegistry').get(e.id + '_plane') || null;
   }
   function inner(inj, c) { return planeOf(inj, c) || c; }
   function enclosingProcess(bo) { while (bo && bo.$type !== 'bpmn:Process') bo = bo.$parent; return bo; }
-  // Zugeklappte Teilprozesse, deren Ebene Inhalt hat.
+  // Collapsed subprocesses whose plane has content.
   function subPlanes(inj) {
     return inj.get('elementRegistry').filter(function (e) {
       var pl = planeOf(inj, e);
@@ -103,12 +103,12 @@
   function topOf(e) { while (e.parent) e = e.parent; return e; }
   function el(inj, id) {
     var reg = inj.get('elementRegistry'), e = reg.get(id);
-    // Prozess-ID in einer Kollaboration: steht nicht in der Registry, gemeint ist der Pool mit diesem Prozess.
+    // Process ID in a collaboration: not in the registry, it refers to the pool with this process.
     if (!e) e = reg.filter(function (x) { return isA(x, 'bpmn:Participant') && x.businessObject.processRef && x.businessObject.processRef.id === id; })[0];
-    if (!e) throw new Error('Element nicht gefunden: ' + id);
+    if (!e) throw new Error('Element not found: ' + id);
     return e;
   }
-  // Pool/Lane/Teilprozess über ID oder (eindeutigen) Namen finden – spart einen describe-Aufruf.
+  // Find a pool/lane/subprocess by ID or (unique) name – saves a describe call.
   function container(inj, ref) {
     var reg = inj.get('elementRegistry'), e = reg.get(ref);
     if (e) return e;
@@ -116,7 +116,7 @@
       return x.type !== 'label' && x.businessObject && x.businessObject.name === ref && (isA(x, 'bpmn:Participant') || isA(x, 'bpmn:Lane') || isA(x, 'bpmn:SubProcess'));
     });
     if (hits.length === 1) return hits[0];
-    throw new Error(hits.length ? 'Name "' + ref + '" ist nicht eindeutig (' + hits.map(function (h) { return h.id; }).join(', ') + ') – ID angeben.' : 'Element nicht gefunden: ' + ref);
+    throw new Error(hits.length ? 'Name "' + ref + '" is ambiguous (' + hits.map(function (h) { return h.id; }).join(', ') + ') – pass the ID.' : 'Element not found: ' + ref);
   }
   function shapesIn(c) { return c.children.filter(function (k) { return !k.waypoints && k.type !== 'label'; }); }
   function box(list) {
@@ -127,7 +127,7 @@
   }
   function centerIn(s, b) { var cx = s.x + s.width / 2, cy = s.y + s.height / 2; return cx > b.x && cx < b.x + b.width && cy > b.y && cy < b.y + b.height; }
 
-  // ---------- Event-Definitionen ----------
+  // ---------- Event definitions ----------
   var EVENT_DEF_TYPES = {
     timer: 'bpmn:TimerEventDefinition', message: 'bpmn:MessageEventDefinition',
     signal: 'bpmn:SignalEventDefinition', error: 'bpmn:ErrorEventDefinition',
@@ -146,10 +146,10 @@
     return bo;
   }
 
-  // Ausführungsplattform des Diagramms: 'camunda7' (camunda:-Erweiterungen) oder 'camunda8' (zeebe:-Erweiterungen).
+  // Execution platform of the diagram: 'camunda7' (camunda: extensions) or 'camunda8' (zeebe: extensions).
   function platformOf(inj) {
     var defs = definitionsOf(inj), v;
-    try { v = defs.get('modeler:executionPlatform'); } catch (e) { /* egal */ }
+    try { v = defs.get('modeler:executionPlatform'); } catch (e) { /* ignore */ }
     v = v || (defs.$attrs && defs.$attrs['modeler:executionPlatform']);
     if (v) return /cloud|zeebe|8/i.test(v) ? 'camunda8' : 'camunda7';
     var moddle = inj.get('moddle'), hasC = !!moddle.getPackage('camunda'), hasZ = !!moddle.getPackage('zeebe');
@@ -161,7 +161,7 @@
 
   function setEventDefinition(inj, element, spec) {
     var bo = element.businessObject;
-    if (!/Event$/.test(bo.$type)) throw new Error('eventDefinition geht nur bei Events, nicht bei ' + bo.$type + '.');
+    if (!/Event$/.test(bo.$type)) throw new Error('eventDefinition only works on events, not on ' + bo.$type + '.');
     var modeling = inj.get('modeling');
     var f = inj.get('bpmnFactory');
     if (spec.type === 'none') {
@@ -169,15 +169,15 @@
       return;
     }
     var defType = EVENT_DEF_TYPES[spec.type];
-    if (!defType) throw new Error('Unbekannter Event-Typ: ' + spec.type);
+    if (!defType) throw new Error('Unknown event type: ' + spec.type);
     var def = f.create(defType);
     if (spec.type === 'timer') {
-      if (!spec.value) throw new Error('Timer braucht "value" (z. B. "P7D" oder "= startDatum").');
+      if (!spec.value) throw new Error('A timer needs "value" (e.g. "P7D" or "= startDate").');
       var prop = TIMER_PROP[spec.timerType || 'duration'];
       def.set(prop, f.create('bpmn:FormalExpression', { body: spec.value }));
       def.get(prop).$parent = def;
     } else if (spec.type === 'conditional') {
-      // Ohne value erlaubt (fachliche Modelle); für ausführbare Prozesse meldet die Prüfung die fehlende Bedingung.
+      // Allowed without value (business models); for executable processes the check reports the missing condition.
       def.condition = f.create('bpmn:FormalExpression', spec.value ? { body: spec.value } : {});
       def.condition.$parent = def;
     } else if (spec.type === 'link') {
@@ -219,18 +219,18 @@
     return out;
   }
 
-  // ---------- Zeebe-Erweiterungen ----------
+  // ---------- Zeebe extensions ----------
   function extOf(bo, type) {
     return ((bo.extensionElements && bo.extensionElements.values) || []).filter(function (v) { return v.$type === type; })[0];
   }
-  // Ersetzt/ergänzt ein Erweiterungselement; props === null entfernt es.
+  // Replaces/adds an extension element; props === null removes it.
   function setExt(inj, element, bo, type, props, make) {
     var f = inj.get('bpmnFactory');
     var values = ((bo.extensionElements && bo.extensionElements.values) || []).filter(function (v) { return v.$type !== type; });
     var old = extOf(bo, type);
     if (props) {
       var merged = {};
-      // vorhandene Attribute behalten (z. B. type, wenn nur retries geändert wird)
+      // keep existing attributes (e.g. type when only retries is changed)
       if (old && !make) old.$descriptor.properties.forEach(function (d) { if (old.get(d.name) !== undefined) merged[d.name] = old.get(d.name); });
       var neu = make ? make(f) : f.create(type, assign(merged, props));
       values.push(neu);
@@ -249,7 +249,7 @@
     if (isC7(inj)) return setProperties7(inj, e, pr);
     var bo = e.businessObject, v;
     var only7 = Object.keys(pr).filter(function (k) { return /^(class|delegateExpression|expression|topic|formKey|formRef|formFields|scriptFormat|taskListeners|executionListeners|historyTimeToLive|asyncBefore|asyncAfter|mapDecisionResult|initiator)$/.test(k); });
-    if (only7.length) throw new Error('Nur in Camunda-7-Diagrammen möglich: ' + only7.join(', ') + ' (dieses Diagramm ist Camunda 8).');
+    if (only7.length) throw new Error('Only possible in Camunda 7 diagrams: ' + only7.join(', ') + ' (this diagram is Camunda 8).');
     if ((v = pickDefined(pr, ['retries']))) setExt(inj, e, bo, 'zeebe:TaskDefinition', v);
     if ((v = pickDefined(pr, ['assignee', 'candidateGroups', 'candidateUsers']))) setExt(inj, e, bo, 'zeebe:AssignmentDefinition', v);
     if ((v = pickDefined(pr, ['dueDate', 'followUpDate']))) setExt(inj, e, bo, 'zeebe:TaskSchedule', v);
@@ -277,9 +277,9 @@
     }
   }
 
-  // ---------- Camunda 7 (camunda:-Attribute und -Erweiterungen) ----------
+  // ---------- Camunda 7 (camunda: attributes and extensions) ----------
   function val(v) { return v === '' || v === null ? undefined : v; }
-  function need7(bo, re, what) { if (!re.test(bo.$type)) throw new Error(what + ' geht nicht bei ' + short(bo.$type) + '.'); }
+  function need7(bo, re, what) { if (!re.test(bo.$type)) throw new Error(what + ' does not work on ' + short(bo.$type) + '.'); }
   function processOf(e) {
     var bo = e.businessObject;
     return bo.$type === 'bpmn:Participant' ? bo.processRef : bo.$type === 'bpmn:Process' ? bo : null;
@@ -297,13 +297,13 @@
     ['class', 'delegateExpression', 'expression'].forEach(function (k) { if (l[k]) a[k] = l[k]; });
     var li = f.create(type, a);
     if (l.script) adopt(li, [li.script = f.create('camunda:Script', { scriptFormat: l.scriptFormat || 'groovy', value: l.script })]);
-    else if (!l['class'] && !l.delegateExpression && !l.expression) throw new Error('Listener braucht class, delegateExpression, expression oder script.');
+    else if (!l['class'] && !l.delegateExpression && !l.expression) throw new Error('A listener needs class, delegateExpression, expression or script.');
     return li;
   }
   function formData7(f, fields) {
     var fd = f.create('camunda:FormData', {
       fields: fields.map(function (d) {
-        if (!d.id) throw new Error('formFields: jedes Feld braucht eine "id" (= Name der Prozessvariable).');
+        if (!d.id) throw new Error('formFields: every field needs an "id" (= name of the process variable).');
         var a = { id: d.id, label: d.label || d.id, type: d.type || (d.values ? 'enum' : 'string') };
         if (d.defaultValue !== undefined) a.defaultValue = String(d.defaultValue);
         if (d.datePattern) a.datePattern = d.datePattern;
@@ -330,30 +330,30 @@
   function setProperties7(inj, e, pr) {
     var bo = e.businessObject, modeling = inj.get('modeling'), f = inj.get('bpmnFactory'), up = {};
     var only8 = Object.keys(pr).filter(function (k) { return /^(retries|headers)$/.test(k); });
-    if (only8.length) throw new Error('Nur in Camunda-8-Diagrammen möglich: ' + only8.join(', ') + ' (dieses Diagramm ist Camunda 7).');
+    if (only8.length) throw new Error('Only possible in Camunda 8 diagrams: ' + only8.join(', ') + ' (this diagram is Camunda 7).');
     var proc = processOf(e), pp = {};
     if (pr.historyTimeToLive !== undefined) pp['camunda:historyTimeToLive'] = val(String(pr.historyTimeToLive));
     ['candidateStarterGroups', 'candidateStarterUsers', 'versionTag'].forEach(function (k) { if (pr[k] !== undefined) pp['camunda:' + k] = val(pr[k]); });
     if (pr.isExecutable !== undefined) pp.isExecutable = !!pr.isExecutable;
     if (Object.keys(pp).length) {
-      if (!proc) throw new Error('historyTimeToLive/isExecutable/candidateStarter… gehören an den Prozess: ID des Pools oder des Prozesses angeben.');
+      if (!proc) throw new Error('historyTimeToLive/isExecutable/candidateStarter… belong to the process: pass the ID of the pool or the process.');
       modeling.updateModdleProperties(e, proc, pp);
     }
     ['assignee', 'candidateGroups', 'candidateUsers', 'dueDate', 'followUpDate', 'priority'].forEach(function (k) {
       if (pr[k] !== undefined) { need7(bo, /UserTask/, k); up['camunda:' + k] = val(pr[k]); }
     });
-    // Formulare: formKey (Embedded Form), formRef (Camunda Form), formFields (Generated Form)
+    // Forms: formKey (embedded form), formRef (Camunda Form), formFields (generated form)
     var formRef = pr.formRef !== undefined ? pr.formRef : pr.formId;
-    if (pr.formKey !== undefined || formRef !== undefined || pr.formFields) need7(bo, /UserTask|StartEvent/, 'Ein Formular');
+    if (pr.formKey !== undefined || formRef !== undefined || pr.formFields) need7(bo, /UserTask|StartEvent/, 'A form');
     if (pr.formKey !== undefined) { up['camunda:formKey'] = val(pr.formKey); if (pr.formKey) { up['camunda:formRef'] = undefined; up['camunda:formRefBinding'] = undefined; } }
     if (formRef !== undefined) { up['camunda:formRef'] = val(formRef); up['camunda:formRefBinding'] = formRef ? pr.formRefBinding || 'latest' : undefined; if (formRef) up['camunda:formKey'] = undefined; }
     if (pr.formFields) setExtAll(inj, e, bo, 'camunda:FormData', pr.formFields.length ? [formData7(f, pr.formFields)] : []);
     if (pr.initiator !== undefined) { need7(bo, /StartEvent/, 'initiator'); up['camunda:initiator'] = val(pr.initiator); }
-    // Implementierung: Java-Klasse, Delegate Expression (Spring Bean), Expression oder External Task (topic)
+    // Implementation: Java class, delegate expression (Spring bean), expression or external task (topic)
     if (pickDefined(pr, ['class', 'delegateExpression', 'expression', 'topic'])) {
       var target = /ServiceTask|SendTask|BusinessRuleTask/.test(bo.$type) ? bo
         : (/Event$/.test(bo.$type) && bo.eventDefinitions && bo.eventDefinitions[0] && bo.eventDefinitions[0].$type === 'bpmn:MessageEventDefinition') ? bo.eventDefinitions[0] : null;
-      if (!target) throw new Error('class/delegateExpression/expression/topic gehen nur bei Service-, Send-, Business-Rule-Tasks und auslösenden Nachrichtenereignissen, nicht bei ' + short(bo.$type) + '.');
+      if (!target) throw new Error('class/delegateExpression/expression/topic only work on service, send and business rule tasks and throwing message events, not on ' + short(bo.$type) + '.');
       var impl = { 'camunda:class': undefined, 'camunda:delegateExpression': undefined, 'camunda:expression': undefined, 'camunda:type': undefined, 'camunda:topic': undefined };
       if (pr.topic) { impl['camunda:type'] = 'external'; impl['camunda:topic'] = pr.topic; }
       else if (pr['class']) impl['camunda:class'] = pr['class'];
@@ -393,7 +393,7 @@
     }
   }
 
-  // Kurzfassung der technischen Eigenschaften (für describe und die Prüfung)
+  // Summary of the technical properties (for describe and the check)
   function propsOf(c7, bo) {
     var o = {}, x;
     var g = function (k, from) { try { return (from || bo).get(k); } catch (e) { return undefined; } };
@@ -425,7 +425,7 @@
   function processInfo(c7, proc) {
     if (!proc) return undefined;
     var o = { processId: proc.id, isExecutable: !!proc.isExecutable };
-    if (c7) { try { var h = proc.get('camunda:historyTimeToLive'); if (h) o.historyTimeToLive = h; } catch (e) { /* egal */ } }
+    if (c7) { try { var h = proc.get('camunda:historyTimeToLive'); if (h) o.historyTimeToLive = h; } catch (e) { /* ignore */ } }
     return o;
   }
 
@@ -453,18 +453,18 @@
   }
 
   function setCondition(inj, flow, condition) {
-    if (flow.businessObject.$type !== 'bpmn:SequenceFlow') throw new Error('condition geht nur bei Sequenzflüssen.');
+    if (flow.businessObject.$type !== 'bpmn:SequenceFlow') throw new Error('condition only works on sequence flows.');
     var src = flow.source && flow.source.businessObject.$type;
-    if (condition && /EventBasedGateway|ParallelGateway/.test(src)) throw new Error(short(src) + ' hat keine Bedingungen an seinen Ausgängen.');
+    if (condition && /EventBasedGateway|ParallelGateway/.test(src)) throw new Error(short(src) + ' has no conditions on its outgoing flows.');
     inj.get('modeling').updateProperties(flow, {
       conditionExpression: condition ? inj.get('bpmnFactory').create('bpmn:FormalExpression', { body: condition }) : undefined,
     });
   }
 
-  // Elementtyp wechseln (bpmn-js Replace), ID und Verbindungen bleiben erhalten.
+  // Change the element type (bpmn-js replace), ID and connections are kept.
   function changeType(inj, element, type) {
     var target = TYPES[type];
-    if (!target || /participant|lane|group|textAnnotation|data/.test(type)) throw new Error('Typwechsel nach ' + type + ' nicht möglich.');
+    if (!target || /participant|lane|group|textAnnotation|data/.test(type)) throw new Error('Changing the type to ' + type + ' is not possible.');
     var bo = element.businessObject;
     if (bo.$type === target && !ATTRS[type]) return element;
     var oldId = element.id;
@@ -473,8 +473,8 @@
     var replaced = inj.get('bpmnReplace').replaceElement(element, assign({ type: target }, ATTRS[type]));
     var lost = links - (replaced.incoming || []).length - (replaced.outgoing || []).length;
     if (lost > 0) {
-      throw new Error('Typwechsel nach ' + type + ' abgebrochen: ' + lost + ' Verbindung(en) wären laut BPMN-Regeln entfernt worden.' +
-        (type === 'eventBasedGateway' ? ' Zuerst den folgenden Ereignissen einen Typ geben (eventDefinition: timer/message/...).' : ''));
+      throw new Error('Type change to ' + type + ' aborted: the BPMN rules would have removed ' + lost + ' connection(s).' +
+        (type === 'eventBasedGateway' ? ' Give the following events a type first (eventDefinition: timer/message/...).' : ''));
     }
     var modeling = inj.get('modeling');
     if (replaced.id !== oldId) modeling.updateProperties(replaced, { id: oldId });
@@ -490,7 +490,7 @@
     return replaced;
   }
 
-  // Alle änderbaren Eigenschaften; wird von addElement, connect und update benutzt.
+  // All changeable properties; used by addElement, connect and update.
   function applyUpdate(inj, e, p) {
     var modeling = inj.get('modeling'), f = inj.get('bpmnFactory');
     if (p.type !== undefined && !e.waypoints && TYPES[p.type] && (e.businessObject.$type !== TYPES[p.type] || ATTRS[p.type]) && p.__created !== true) e = changeType(inj, e, p.type);
@@ -502,14 +502,14 @@
       else modeling.updateProperties(e, { name: text });
     }
     if (p.jobType !== undefined) {
-      if (isC7(inj)) throw new Error('jobType gibt es nur in Camunda 8. Camunda 7: properties.class, delegateExpression, expression oder topic (External Task) verwenden.');
-      if (!/ServiceTask|SendTask|BusinessRuleTask|ScriptTask|EndEvent|IntermediateThrowEvent/.test(bo.$type)) throw new Error('jobType geht nicht bei ' + short(bo.$type) + '.');
+      if (isC7(inj)) throw new Error('jobType only exists in Camunda 8. Camunda 7: use properties.class, delegateExpression, expression or topic (external task).');
+      if (!/ServiceTask|SendTask|BusinessRuleTask|ScriptTask|EndEvent|IntermediateThrowEvent/.test(bo.$type)) throw new Error('jobType does not work on ' + short(bo.$type) + '.');
       setExt(inj, e, bo, 'zeebe:TaskDefinition', { type: p.jobType });
     }
     if (p.properties) setProperties(inj, e, p.properties);
     if (p.condition !== undefined) setCondition(inj, e, p.condition);
     if (p.isDefault !== undefined) {
-      if (!e.waypoints || !e.source) throw new Error('isDefault geht nur bei Sequenzflüssen.');
+      if (!e.waypoints || !e.source) throw new Error('isDefault only works on sequence flows.');
       modeling.updateProperties(e.source, { default: p.isDefault ? bo : undefined });
     }
     if (p.documentation !== undefined) {
@@ -518,20 +518,20 @@
     if (p.interrupting !== undefined) {
       if (bo.$type === 'bpmn:BoundaryEvent') modeling.updateProperties(e, { cancelActivity: !!p.interrupting });
       else if (bo.$type === 'bpmn:StartEvent') modeling.updateProperties(e, { isInterrupting: !!p.interrupting });
-      else throw new Error('interrupting geht nur bei Boundary- und Start-Events.');
+      else throw new Error('interrupting only works on boundary and start events.');
     }
     if (p.loop) setLoop(inj, e, p.loop);
     if (p.state !== undefined) {
-      if (!/DataObjectReference|DataStoreReference/.test(bo.$type)) throw new Error('state geht nur bei Datenobjekten/-speichern.');
+      if (!/DataObjectReference|DataStoreReference/.test(bo.$type)) throw new Error('state only works on data objects/stores.');
       var st = p.state ? f.create('bpmn:DataState', { name: p.state }) : undefined;
       if (st) st.$parent = bo;
       modeling.updateModdleProperties(e, bo, { dataState: st });
-      // bpmn-js zeichnet den Zustand nicht: zusätzlich sichtbar als "Name [Zustand]"
+      // bpmn-js does not draw the state: additionally show it as "Name [state]"
       var base = (bo.name || '').replace(/\s*\[[^\]]*\]\s*$/, '');
       modeling.updateProperties(e, { name: p.state ? base + ' [' + p.state + ']' : base });
     }
     if (p.collection !== undefined) {
-      if (bo.$type !== 'bpmn:DataObjectReference' || !bo.dataObjectRef) throw new Error('collection geht nur bei Datenobjekten.');
+      if (bo.$type !== 'bpmn:DataObjectReference' || !bo.dataObjectRef) throw new Error('collection only works on data objects.');
       modeling.updateModdleProperties(e, bo.dataObjectRef, { isCollection: !!p.collection });
     }
     if (p.color) modeling.setColor([e], { fill: p.color.fill, stroke: p.color.stroke });
@@ -539,7 +539,7 @@
     return e;
   }
 
-  // ---------- Layout direkt setzen: ein einziger Undo-Schritt, ohne Seiteneffekte ----------
+  // ---------- Apply the layout directly: a single undo step, without side effects ----------
   function syncDi(e, f) {
     var di = e.di || (e.labelTarget && e.labelTarget.di);
     if (!di) return;
@@ -600,11 +600,11 @@
     return cs;
   }
 
-  // ---------- Graph (für Layout, Prüfung und describe) ----------
+  // ---------- Graph (for layout, check and describe) ----------
   function graph(inj, opts) {
     var plane = opts && opts.plane, nodes = [], edges = [], c7 = isC7(inj);
     var root = plane ? planeOf(inj, el(inj, plane)) : rootOf(inj);
-    if (!root) throw new Error(plane + ' ist kein zugeklappter Teilprozess mit eigener Ebene.');
+    if (!root) throw new Error(plane + ' is not a collapsed subprocess with its own plane.');
     var all = inj.get('elementRegistry').filter(function (e) { return e !== root && e.parent && e.type !== 'label' && !e.labelTarget && e.businessObject && topOf(e) === root; });
     var topLanes = all.filter(function (e) { return isA(e, 'bpmn:Lane') && isA(e.parent, 'bpmn:Participant'); });
     function lb(e) { return e.label ? { x: e.label.x, y: e.label.y, width: e.label.width, height: e.label.height } : undefined; }
@@ -649,7 +649,7 @@
     };
   }
 
-  // ---------- Elemente anlegen ----------
+  // ---------- Create elements ----------
   function freeSpot(inj, container, shape, lane) {
     var root = rootOf(inj), area = lane || container;
     var kids = shapesIn(container).filter(function (k) { return !isA(k, 'bpmn:Lane') && !isA(k, 'bpmn:Participant') && (!lane || centerIn(k, lane)); });
@@ -667,7 +667,7 @@
     if (p.after) return { container: el(inj, p.after).parent };
     if (isA(root, 'bpmn:Collaboration')) {
       var pools = shapesIn(root).filter(function (k) { return isA(k, 'bpmn:Participant') && k.businessObject.processRef; });
-      if (!pools.length) throw new Error('Kein aufgeklappter Pool vorhanden – "parent" angeben.');
+      if (!pools.length) throw new Error('There is no expanded pool – pass "parent".');
       return { container: pools[0] };
     }
     return { container: root };
@@ -689,7 +689,7 @@
     var proc = created.businessObject.processRef;
     if (proc && p.processId && proc.id !== p.processId) {
       var ids = inj.get('moddle').ids;
-      if (ids && ids.assigned(p.processId)) throw new Error('ID existiert schon: ' + p.processId);
+      if (ids && ids.assigned(p.processId)) throw new Error('ID already exists: ' + p.processId);
       if (ids) { ids.unclaim(proc.id); ids.claim(p.processId, proc); }
       proc.id = p.processId;
     }
@@ -716,7 +716,7 @@
   function addLane(inj, p) {
     var modeling = inj.get('modeling');
     var target = container(inj, p.parent || p.after || '');
-    if (!isA(target, 'bpmn:Participant') && !isA(target, 'bpmn:Lane')) throw new Error('Lane braucht "parent" = Pool oder Lane.');
+    if (!isA(target, 'bpmn:Participant') && !isA(target, 'bpmn:Lane')) throw new Error('A lane needs "parent" = pool or lane.');
     var lane = modeling.addLane(target, p.position === 'top' ? 'top' : 'bottom');
     if (p.name) modeling.updateProperties(lane, { name: p.name });
     if (p.id) modeling.updateProperties(lane, { id: p.id });
@@ -728,16 +728,16 @@
 
   function addElement(inj, p) {
     var type = TYPES[p.type];
-    if (!type) throw new Error('Unbekannter Typ: ' + p.type);
+    if (!type) throw new Error('Unknown type: ' + p.type);
     var reg = inj.get('elementRegistry'), modeling = inj.get('modeling'), ef = inj.get('elementFactory');
-    if (p.id && reg.get(p.id)) throw new Error('ID existiert schon: ' + p.id);
+    if (p.id && reg.get(p.id)) throw new Error('ID already exists: ' + p.id);
     if (p.type === 'lane') return addLane(inj, p);
-    // ID muss am Business-Objekt gesetzt werden, sonst landet sie nicht in der Datei.
+    // The ID must be set on the business object, otherwise it does not end up in the file.
     var bo = inj.get('bpmnFactory').create(type, p.id ? { id: p.id } : {});
     var attrs = assign({ type: type, businessObject: bo }, ATTRS[p.type]);
     if (p.expanded === false) attrs.isExpanded = false;
     if (p.type === 'boundaryEvent' && p.interrupting === false) attrs.cancelActivity = false;
-    // Ereignistyp schon beim Anlegen setzen: sonst verbieten die BPMN-Regeln z. B. die Verbindung vom ereignisbasierten Gateway.
+    // Set the event type on creation: otherwise the BPMN rules forbid e.g. the connection from an event-based gateway.
     if (p.eventDefinition && EVENT_DEF_TYPES[p.eventDefinition.type] && /Event$/.test(type)) attrs.eventDefinitionType = EVENT_DEF_TYPES[p.eventDefinition.type];
     var created, extra = {}, host = p.attachTo ? el(inj, p.attachTo) : null;
 
@@ -745,7 +745,7 @@
       var r = addParticipant(inj, p, bo);
       created = r.created; extra = r.extra;
     } else if (p.type === 'boundaryEvent') {
-      if (!host) throw new Error('boundaryEvent braucht "attachTo" (ID der Aktivität).');
+      if (!host) throw new Error('boundaryEvent needs "attachTo" (ID of the activity).');
       var n = (host.attachers || []).length;
       created = modeling.createShape(ef.createShape(attrs), { x: host.x + host.width - 30 - n * 46, y: host.y + host.height }, host, { attach: true });
     } else if (/^(textAnnotation|dataObject|dataStore)$/.test(p.type)) {
@@ -766,18 +766,18 @@
       if (src && !where.explicit && !p.position) {
         created = inj.get('autoPlace').append(src, s);
         if (!(created.incoming || []).some(function (c) { return c.source === src; })) {
-          throw new Error('Verbindung von ' + p.after + ' zu einem ' + p.type + ' ist laut BPMN-Regeln nicht erlaubt' +
-            (isA(src, 'bpmn:EventBasedGateway') ? ' (nach einem ereignisbasierten Gateway folgen nur eintretende Ereignisse mit eventDefinition oder receiveTask).' : '.'));
+          throw new Error('The BPMN rules do not allow a connection from ' + p.after + ' to a ' + p.type +
+            (isA(src, 'bpmn:EventBasedGateway') ? ' (an event-based gateway may only be followed by catching events with eventDefinition or a receiveTask).' : '.'));
         }
       } else {
-        // Hinter dem Vorgänger auf dessen Mittellinie, damit die Verbindung gerade ist (keine Mini-Stufen);
-        // nur wenn der Vorgänger in einer anderen Lane liegt, auf die Mitte der Ziel-Lane.
+        // Behind the predecessor on its center line so the connection is straight (no mini steps);
+        // only if the predecessor lies in another lane, on the center of the target lane.
         var inLane = function (l, e) { return l && e.y + e.height / 2 > l.y && e.y + e.height / 2 < l.y + l.height; };
         var at = p.position || (src
           ? { x: src.x + src.width + 80 + s.width / 2, y: where.lane && !inLane(where.lane, src) ? where.lane.y + where.lane.height / 2 : src.y + src.height / 2 }
           : freeSpot(inj, where.container, s, where.lane));
         created = modeling.createShape(s, at, where.lane || where.container);
-        if (src) { var conn = modeling.connect(src, created); if (!conn) throw new Error('Verbindung von ' + p.after + ' laut BPMN-Regeln nicht erlaubt.'); }
+        if (src) { var conn = modeling.connect(src, created); if (!conn) throw new Error('The BPMN rules do not allow a connection from ' + p.after + '.'); }
       }
       if (src && p.flowName) {
         var inc = (created.incoming || []).filter(function (c) { return c.source === src; })[0];
@@ -788,15 +788,15 @@
     delete q.type; delete q.newId;
     if (p.type === 'boundaryEvent') delete q.interrupting;
     applyUpdate(inj, created, q);
-    try { if (topOf(created) === inj.get('canvas').getRootElement()) inj.get('canvas').scrollToElement(created); } catch (e) { /* egal */ }
+    try { if (topOf(created) === inj.get('canvas').getRootElement()) inj.get('canvas').scrollToElement(created); } catch (e) { /* ignore */ }
     return assign({ id: created.id }, extra);
   }
 
-  // SVG einer Ebene (plane = ID eines zugeklappten Teilprozesses), optional auf einen Ausschnitt zugeschnitten
-  // (region = {x,y,width,height} oder ids = Elemente, um die herum ausgeschnitten wird).
+  // SVG of a plane (plane = ID of a collapsed subprocess), optionally cropped
+  // (region = {x,y,width,height} or ids = elements to crop around).
   function svgOf(inj, p) {
     var canvas = inj.get('canvas'), before = canvas.getRootElement(), target = p.plane ? planeOf(inj, el(inj, p.plane)) : rootOf(inj);
-    if (!target) return Promise.reject(new Error(p.plane + ' ist kein zugeklappter Teilprozess mit eigener Ebene.'));
+    if (!target) return Promise.reject(new Error(p.plane + ' is not a collapsed subprocess with its own plane.'));
     var crop = p.region;
     if (!crop && p.ids && p.ids.length) {
       var parts = [];
@@ -836,12 +836,12 @@
         g.drawImage(img, 0, 0, c.width, c.height);
         resolve({ png: c.toDataURL('image/png').split(',')[1], width: c.width, height: c.height });
       };
-      img.onerror = function () { reject(new Error('Diagramm konnte nicht gerendert werden.')); };
+      img.onerror = function () { reject(new Error('The diagram could not be rendered.')); };
       img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
     });
   }
 
-  // ---------- Befehle ----------
+  // ---------- Commands ----------
   var handlers = {
     status: function () {
       var inj = active();
@@ -859,13 +859,13 @@
       var inj = need(), s = el(inj, p.source), t = el(inj, p.target), modeling = inj.get('modeling');
       var allowed = inj.get('bpmnRules').canConnect(s, t);
       var attrs = p.type === 'association' ? { type: CONNECTIONS.association } : allowed;
-      if (!attrs) throw new Error('Verbindung ' + p.source + ' → ' + p.target + ' ist laut BPMN-Regeln nicht erlaubt.');
+      if (!attrs) throw new Error('The BPMN rules do not allow the connection ' + p.source + ' → ' + p.target + '.');
       if (p.type && p.type !== 'association' && attrs.type !== CONNECTIONS[p.type]) {
-        throw new Error('Zwischen diesen Elementen ist kein ' + p.type + '-Fluss erlaubt, sondern ' + short(attrs.type) + '.');
+        throw new Error('No ' + p.type + ' flow is allowed between these elements, only ' + short(attrs.type) + '.');
       }
-      if (p.condition && /EventBasedGateway|ParallelGateway/.test(s.businessObject.$type)) throw new Error(short(s.businessObject.$type) + ' hat keine Bedingungen an seinen Ausgängen.');
+      if (p.condition && /EventBasedGateway|ParallelGateway/.test(s.businessObject.$type)) throw new Error(short(s.businessObject.$type) + ' has no conditions on its outgoing flows.');
       var conn = modeling.connect(s, t, attrs);
-      if (!conn) throw new Error('Verbindung konnte nicht angelegt werden.');
+      if (!conn) throw new Error('The connection could not be created.');
       applyUpdate(inj, conn, { name: p.name, condition: p.condition || undefined, isDefault: p.isDefault || undefined, color: p.color });
       return { id: conn.id, type: short(conn.businessObject.$type) };
     },
@@ -884,7 +884,7 @@
     arrange: function (p) {
       var inj = need(), modeling = inj.get('modeling');
       var list = (p.ids || (p.id ? [p.id] : [])).map(function (id) { return el(inj, id); });
-      if (!list.length) throw new Error('"id" oder "ids" fehlt.');
+      if (!list.length) throw new Error('"id" or "ids" is missing.');
       var e = list[0];
       if (p.action === 'move') {
         var d = p.x !== undefined || p.y !== undefined
@@ -894,16 +894,16 @@
       } else if (p.action === 'resize') {
         modeling.resizeShape(e, { x: p.x !== undefined ? p.x : e.x, y: p.y !== undefined ? p.y : e.y, width: p.width || e.width, height: p.height || e.height });
       } else if (p.action === 'waypoints') {
-        if (!e.waypoints) throw new Error(e.id + ' ist keine Verbindung.');
+        if (!e.waypoints) throw new Error(e.id + ' is not a connection.');
         if (p.waypoints && p.waypoints.length > 1) modeling.updateWaypoints(e, p.waypoints); else modeling.layoutConnection(e);
       } else if (p.action === 'label') {
-        if (!e.label) throw new Error(e.id + ' hat keine frei platzierbare Beschriftung.');
+        if (!e.label) throw new Error(e.id + ' has no freely placeable label.');
         modeling.moveShape(e.label, { x: p.x - e.label.x, y: p.y - e.label.y });
       } else if (p.action === 'align') {
         inj.get('alignElements').trigger(list, p.to || 'middle');
       } else if (p.action === 'distribute') {
         inj.get('distributeElements').trigger(list, p.axis || 'horizontal');
-      } else throw new Error('Unbekannte Aktion: ' + p.action);
+      } else throw new Error('Unknown action: ' + p.action);
       return { ok: true };
     },
 
@@ -911,7 +911,7 @@
       var inj = need();
       var ctx = { after: { shapes: p.shapes || {}, labels: p.labels || {}, edges: p.edges || {} } };
       commandStack(inj).execute('mcp.applyLayout', ctx);
-      try { inj.get('canvas').zoom('fit-viewport', 'auto'); } catch (e) { /* egal */ }
+      try { inj.get('canvas').zoom('fit-viewport', 'auto'); } catch (e) { /* ignore */ }
       return ctx.count;
     },
 
@@ -935,11 +935,11 @@
       return (p.operations || []).reduce(function (chain, op) {
         return chain.then(function () {
           var h = handlers[names[op.op]];
-          if (!h) throw new Error('Unbekannte Operation: ' + op.op);
+          if (!h) throw new Error('Unknown operation: ' + op.op);
           return Promise.resolve(atomic(names[op.op], h, op)).then(function (r) { results.push(r); i++; });
         });
       }, Promise.resolve()).then(function () { return { results: results }; }, function (err) {
-        throw new Error('Schritt ' + (i + 1) + ' (' + JSON.stringify(p.operations[i]) + ') fehlgeschlagen: ' + ((err && err.message) || err) + ' – ' + i + ' Schritte davor wurden ausgeführt.');
+        throw new Error('Step ' + (i + 1) + ' (' + JSON.stringify(p.operations[i]) + ') failed: ' + ((err && err.message) || err) + ' – ' + i + ' earlier steps were executed.');
       });
     },
 
@@ -947,12 +947,12 @@
     redo: function () { need().get('commandStack').redo(); return {}; },
 
     save: function () {
-      if (!api.triggerAction) throw new Error('Speichern nicht verfügbar.');
+      if (!api.triggerAction) throw new Error('Saving is not available.');
       return Promise.resolve(api.triggerAction('save')).then(function () { return { saved: true }; });
     },
   };
 
-  // Schlägt ein ändernder Befehl mittendrin fehl, werden seine Teilschritte zurückgenommen.
+  // If a mutating command fails halfway, its partial steps are rolled back.
   var MUTATING = { addElement: 1, connect: 1, update: 1, remove: 1, arrange: 1 };
   function atomic(method, h, params) {
     if (!MUTATING[method]) return h(params);
@@ -963,10 +963,10 @@
     }
   }
 
-  // Direkter Zugang ohne WebSocket: der Datei-Modus (headless.js) ruft die Befehle so auf.
+  // Direct access without WebSocket: file mode (headless.js) calls the commands this way.
   window.__bpmnMcp = { call: function (method, params) { return atomic(method, handlers[method], params || {}); } };
 
-  // ---------- WebSocket zum MCP-Server ----------
+  // ---------- WebSocket to the MCP server ----------
   function start() {
     var ws;
     function connect() {
@@ -976,12 +976,12 @@
         try { msg = JSON.parse(ev.data); } catch (e) { return; }
         var h = handlers[msg.method];
         Promise.resolve()
-          .then(function () { if (!h) throw new Error('Unbekannte Methode: ' + msg.method + ' (Plugin veraltet? install-plugin.sh ausführen und Modeler neu starten)'); return atomic(msg.method, h, msg.params || {}); })
+          .then(function () { if (!h) throw new Error('Unknown method: ' + msg.method + ' (plugin outdated? run install-plugin.sh and restart the Modeler)'); return atomic(msg.method, h, msg.params || {}); })
           .then(function (result) { ws.send(JSON.stringify({ id: msg.id, result: result })); },
                 function (err) { ws.send(JSON.stringify({ id: msg.id, error: String((err && err.message) || err) })); });
       };
       ws.onclose = function () { setTimeout(connect, 3000); };
-      ws.onerror = function () { try { ws.close(); } catch (e) { /* egal */ } };
+      ws.onerror = function () { try { ws.close(); } catch (e) { /* ignore */ } };
     }
     connect();
   }

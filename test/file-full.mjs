@@ -1,6 +1,6 @@
-// Datei-Modus mit vollem Funktionsumfang (headless bpmn-js): dieselben Szenarien wie live-basic/live-pools,
-// dazu Standardfluss, Alles-oder-nichts-Batch, arrange ohne Neu-Layout, undo/redo, Screenshot.
-// Aufruf: node test/file-full.mjs [ausgabe-präfix]  (schreibt dann <präfix>-*.bpmn/.png)
+// File mode with the full feature set (headless bpmn-js): the same scenarios as live-basic/live-pools,
+// plus default flow, all-or-nothing batch, arrange without re-layout, undo/redo, screenshot.
+// Usage: node test/file-full.mjs [output-prefix]  (then writes <prefix>-*.bpmn/.png)
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,121 +19,121 @@ const call = async (name, args = {}, { expectError = false, quiet = false } = {}
   const text = r.content.find((c) => c.type === 'text')?.text ?? '';
   const bad = !!r.isError !== expectError;
   if (bad) failed++;
-  if (!quiet || bad) console.log(bad ? 'FEHLER' : 'ok    ', name, text.length > 300 ? text.slice(0, 300) + ' …' : text);
+  if (!quiet || bad) console.log(bad ? 'ERROR ' : 'ok    ', name, text.length > 300 ? text.slice(0, 300) + ' …' : text);
   return { ...r, text };
 };
-const expect = (label, cond) => { console.log(cond ? 'ok    ' : 'FEHLER', label); if (!cond) failed++; };
+const expect = (label, cond) => { console.log(cond ? 'ok    ' : 'ERROR ', label); if (!cond) failed++; };
 
-// ---------- 1. Bestellprozess (wie live-basic) ----------
-const f1 = path.join(dir, 'bestellung.bpmn');
-await call('create_diagram', { file: f1, processId: 'Process_Bestellung', name: 'Bestellung' });
+// ---------- 1. Order process (as in live-basic) ----------
+const f1 = path.join(dir, 'order.bpmn');
+await call('create_diagram', { file: f1, processId: 'Process_Order', name: 'Order' });
 await call('create_diagram', { file: f1 }, { expectError: true });
 await call('batch', { file: f1, operations: [
-  { op: 'add', type: 'startEvent', id: 'S', name: 'Bestellung eingegangen' },
-  { op: 'add', type: 'userTask', id: 'T_Pruefen', name: 'Bestellung prüfen', after: 'S', properties: { assignee: '= sachbearbeiter', formId: 'pruefen-form' } },
-  { op: 'add', type: 'boundaryEvent', id: 'B_Timeout', name: '2 Tage vergangen', attachTo: 'T_Pruefen', interrupting: false, eventDefinition: { type: 'timer', timerType: 'duration', value: 'P2D' } },
-  { op: 'add', type: 'sendTask', id: 'T_Erinnern', name: 'Erinnerung senden', after: 'B_Timeout', jobType: 'send-reminder' },
-  { op: 'add', type: 'endEvent', id: 'E_Erinnert', name: 'Erinnerung gesendet', after: 'T_Erinnern' },
-  { op: 'add', type: 'exclusiveGateway', id: 'G_Ok', name: 'Bestellung korrekt?', after: 'T_Pruefen' },
-  { op: 'add', type: 'subProcess', id: 'SP_Liefern', name: 'Ware liefern', after: 'G_Ok', flowName: 'ja' },
-  { op: 'add', type: 'startEvent', id: 'SP_S', name: 'Lieferung gestartet', parent: 'SP_Liefern' },
-  { op: 'add', type: 'serviceTask', id: 'SP_T', name: 'Ware verpacken', after: 'SP_S', jobType: 'pack', loop: { type: 'parallel', inputCollection: '= positionen', inputElement: 'position' } },
-  { op: 'add', type: 'endEvent', id: 'SP_E', name: 'Ware verpackt', after: 'SP_T' },
-  { op: 'add', type: 'endEvent', id: 'E_Ok', name: 'Bestellung geliefert', after: 'SP_Liefern' },
-  { op: 'add', type: 'endEvent', id: 'E_Nok', name: 'Bestellung abgelehnt', after: 'G_Ok', flowName: 'nein', eventDefinition: { type: 'error', name: 'abgelehnt', code: 'REJECTED' } },
-  { op: 'add', type: 'dataObject', id: 'D_Best', name: 'Bestellung', attachTo: 'T_Pruefen', direction: 'input' },
-  { op: 'add', type: 'textAnnotation', id: 'A_1', name: 'Nur bei Neukunden', attachTo: 'G_Ok' },
-  { op: 'update', id: 'T_Pruefen', color: { fill: '#e3f2fd', stroke: '#1565c0' }, documentation: 'Prüfung nach Vier-Augen-Prinzip' },
+  { op: 'add', type: 'startEvent', id: 'S', name: 'Order received' },
+  { op: 'add', type: 'userTask', id: 'T_Check', name: 'Check order', after: 'S', properties: { assignee: '= clerk', formId: 'check-form' } },
+  { op: 'add', type: 'boundaryEvent', id: 'B_Timeout', name: '2 days passed', attachTo: 'T_Check', interrupting: false, eventDefinition: { type: 'timer', timerType: 'duration', value: 'P2D' } },
+  { op: 'add', type: 'sendTask', id: 'T_Remind', name: 'Send reminder', after: 'B_Timeout', jobType: 'send-reminder' },
+  { op: 'add', type: 'endEvent', id: 'E_Reminded', name: 'Reminder sent', after: 'T_Remind' },
+  { op: 'add', type: 'exclusiveGateway', id: 'G_Ok', name: 'Order correct?', after: 'T_Check' },
+  { op: 'add', type: 'subProcess', id: 'SP_Deliver', name: 'Deliver goods', after: 'G_Ok', flowName: 'yes' },
+  { op: 'add', type: 'startEvent', id: 'SP_S', name: 'Delivery started', parent: 'SP_Deliver' },
+  { op: 'add', type: 'serviceTask', id: 'SP_T', name: 'Pack goods', after: 'SP_S', jobType: 'pack', loop: { type: 'parallel', inputCollection: '= items', inputElement: 'item' } },
+  { op: 'add', type: 'endEvent', id: 'SP_E', name: 'Goods packed', after: 'SP_T' },
+  { op: 'add', type: 'endEvent', id: 'E_Ok', name: 'Order delivered', after: 'SP_Deliver' },
+  { op: 'add', type: 'endEvent', id: 'E_Nok', name: 'Order rejected', after: 'G_Ok', flowName: 'no', eventDefinition: { type: 'error', name: 'rejected', code: 'REJECTED' } },
+  { op: 'add', type: 'dataObject', id: 'D_Order', name: 'Order', attachTo: 'T_Check', direction: 'input' },
+  { op: 'add', type: 'textAnnotation', id: 'A_1', name: 'New customers only', attachTo: 'G_Ok' },
+  { op: 'update', id: 'T_Check', color: { fill: '#e3f2fd', stroke: '#1565c0' }, documentation: 'Check using the four-eyes principle' },
 ] });
 
-// Standardfluss + Bedingung (gab es im alten Datei-Modus nicht)
+// Default flow + condition
 const d1 = JSON.parse((await call('describe_diagram', { file: f1 }, { quiet: true })).text);
 const flow = (from, to) => d1.flows.find((f) => f.from === from && f.to === to).id;
-await call('update_element', { file: f1, id: flow('G_Ok', 'SP_Liefern'), condition: '= korrekt' });
+await call('update_element', { file: f1, id: flow('G_Ok', 'SP_Deliver'), condition: '= correct' });
 await call('update_element', { file: f1, id: flow('G_Ok', 'E_Nok'), isDefault: true });
-// Elemente im Teilprozess sind jetzt erreichbar
-await call('update_element', { file: f1, id: 'SP_T', name: 'Ware verpacken', properties: { retries: '5', headers: { prio: 'hoch' } } });
+// Elements inside the subprocess are reachable
+await call('update_element', { file: f1, id: 'SP_T', name: 'Pack goods', properties: { retries: '5', headers: { prio: 'high' } } });
 const check1 = await call('check_diagram', { file: f1 });
-expect('keine fehlende Bedingung gemeldet', !/bedingung-fehlt|ohne Bedingung/.test(check1.text));
-expect('jobType bleibt bei properties-Änderung erhalten', !/jobtyp-fehlt/.test(check1.text));
+expect('no missing condition reported', !/condition-missing|without a condition/.test(check1.text));
+expect('jobType survives a properties change', !/job-type-missing/.test(check1.text));
 
 const xml1 = fs.readFileSync(f1, 'utf8');
 const has = (s) => xml1.includes(s);
 for (const [k, v] of Object.entries({
   boundary: has('cancelActivity="false"'), timer: has('<bpmn:timeDuration'), mi: has('multiInstanceLoopCharacteristics') && has('zeebe:loopCharacteristics'),
   assign: has('zeebe:assignmentDefinition') && has('zeebe:formDefinition'), error: has('errorCode="REJECTED"'), data: has('dataInputAssociation'),
-  anno: has('Nur bei Neukunden') && has('bpmn:association'), color: has('#e3f2fd'), doc: has('Vier-Augen'), job: has('send-reminder'),
+  anno: has('New customers only') && has('bpmn:association'), color: has('#e3f2fd'), doc: has('four-eyes'), job: has('send-reminder'),
   sub: has('isExpanded="true"'), default: /exclusiveGateway id="G_Ok"[^>]*default=/.test(xml1), headers: has('zeebe:taskHeaders') && has('retries="5"'),
   platform: has('modeler:executionPlatform="Camunda Cloud"'),
-})) expect(`Datei enthält ${k}`, v);
+})) expect(`file contains ${k}`, v);
 
 const shot = await call('screenshot_diagram', { file: f1 }, { quiet: true });
 const img = shot.content.find((c) => c.type === 'image');
-expect('Screenshot geliefert', img && img.data.length > 1000);
-if (out) { fs.copyFileSync(f1, `${out}-bestellung.bpmn`); fs.writeFileSync(`${out}-bestellung.png`, Buffer.from(img.data, 'base64')); }
+expect('screenshot returned', img && img.data.length > 1000);
+if (out) { fs.copyFileSync(f1, `${out}-order.bpmn`); fs.writeFileSync(`${out}-order.png`, Buffer.from(img.data, 'base64')); }
 
-// ---------- 2. Alles oder nichts, undo/redo, arrange ----------
+// ---------- 2. All or nothing, undo/redo, arrange ----------
 const before = fs.readFileSync(f1, 'utf8');
 await call('batch', { file: f1, operations: [
-  { op: 'add', type: 'task', id: 'X_1', name: 'Zwischenschritt', after: 'S' },
-  { op: 'connect', source: 'X_1', target: 'GIBTS_NICHT' },
+  { op: 'add', type: 'task', id: 'X_1', name: 'Intermediate step', after: 'S' },
+  { op: 'connect', source: 'X_1', target: 'DOES_NOT_EXIST' },
 ] }, { expectError: true });
-expect('fehlgeschlagener Batch lässt Datei unverändert', fs.readFileSync(f1, 'utf8') === before);
-await call('remove_element', { file: f1, ids: ['A_1', 'D_Best'] });
-expect('Element gelöscht', !fs.readFileSync(f1, 'utf8').includes('Nur bei Neukunden'));
+expect('failed batch leaves the file unchanged', fs.readFileSync(f1, 'utf8') === before);
+await call('remove_element', { file: f1, ids: ['A_1', 'D_Order'] });
+expect('element deleted', !fs.readFileSync(f1, 'utf8').includes('New customers only'));
 await call('undo', { file: f1 });
-expect('undo stellt Datei wieder her', fs.readFileSync(f1, 'utf8') === before);
+expect('undo restores the file', fs.readFileSync(f1, 'utf8') === before);
 await call('redo', { file: f1 });
-expect('redo löscht wieder', !fs.readFileSync(f1, 'utf8').includes('Nur bei Neukunden'));
+expect('redo deletes again', !fs.readFileSync(f1, 'utf8').includes('New customers only'));
 await call('undo', { file: f1 });
 await call('arrange', { file: f1, action: 'move', id: 'A_1', dx: 0, dy: -40 });
 const moved = fs.readFileSync(f1, 'utf8');
-await call('update_element', { file: f1, id: 'A_1', name: 'Nur bei Neukunden!', layout: false });
+await call('update_element', { file: f1, id: 'A_1', name: 'New customers only!', layout: false });
 const yOf = (xml) => /bpmnElement="A_1">\s*<dc:Bounds x="[\d.]+" y="([\d.]+)"/.exec(xml)?.[1];
-expect('layout: false behält manuelle Anordnung', yOf(moved) && yOf(moved) === yOf(fs.readFileSync(f1, 'utf8')));
-await call('add_element', { file: path.join(dir, 'fehlt.bpmn'), type: 'task' }, { expectError: true });
-await call('add_element', { file: 'relativ.bpmn', type: 'task' }, { expectError: true });
+expect('layout: false keeps the manual arrangement', yOf(moved) && yOf(moved) === yOf(fs.readFileSync(f1, 'utf8')));
+await call('add_element', { file: path.join(dir, 'missing.bpmn'), type: 'task' }, { expectError: true });
+await call('add_element', { file: 'relative.bpmn', type: 'task' }, { expectError: true });
 
-// ---------- 3. Pools, Lanes, Nachrichtenfluss (wie live-pools) ----------
-const f2 = path.join(dir, 'urlaub.bpmn');
-await call('create_diagram', { file: f2, processId: 'Process_Urlaub' });
+// ---------- 3. Pools, lanes, message flow (as in live-pools) ----------
+const f2 = path.join(dir, 'vacation.bpmn');
+await call('create_diagram', { file: f2, processId: 'Process_Vacation' });
 await call('batch', { file: f2, operations: [
-  { op: 'add', type: 'startEvent', id: 'S', name: 'Urlaubswunsch entstanden' },
-  { op: 'add', type: 'participant', id: 'P_Firma', name: 'Unternehmen', lanes: ['Mitarbeiter', 'Führungskraft', 'Personalabteilung'] },
+  { op: 'add', type: 'startEvent', id: 'S', name: 'Vacation wanted' },
+  { op: 'add', type: 'participant', id: 'P_Company', name: 'Company', lanes: ['Employee', 'Manager', 'HR department'] },
 ] }, { quiet: true });
 const d2 = JSON.parse((await call('describe_diagram', { file: f2 }, { quiet: true })).text);
 const lane = (n) => d2.elements.find((e) => e.type === 'Lane' && e.name === n).id;
 await call('batch', { file: f2, operations: [
-  { op: 'add', type: 'userTask', id: 'T_Antrag', name: 'Urlaubsantrag stellen', after: 'S' },
-  { op: 'add', type: 'userTask', id: 'T_Pruefen', name: 'Antrag prüfen', after: 'T_Antrag', parent: lane('Führungskraft') },
-  { op: 'add', type: 'exclusiveGateway', id: 'G_Ok', name: 'Antrag genehmigt?', after: 'T_Pruefen' },
-  { op: 'add', type: 'serviceTask', id: 'T_Buchen', name: 'Urlaub eintragen', after: 'G_Ok', flowName: 'ja', parent: lane('Personalabteilung'), jobType: 'book-vacation' },
-  { op: 'add', type: 'userTask', id: 'T_Info', name: 'Ablehnung lesen', after: 'G_Ok', flowName: 'nein', parent: lane('Mitarbeiter') },
-  { op: 'add', type: 'exclusiveGateway', id: 'G_Join', after: 'T_Buchen' },
+  { op: 'add', type: 'userTask', id: 'T_Request', name: 'Submit vacation request', after: 'S' },
+  { op: 'add', type: 'userTask', id: 'T_Check', name: 'Check request', after: 'T_Request', parent: lane('Manager') },
+  { op: 'add', type: 'exclusiveGateway', id: 'G_Ok', name: 'Request approved?', after: 'T_Check' },
+  { op: 'add', type: 'serviceTask', id: 'T_Book', name: 'Record vacation', after: 'G_Ok', flowName: 'yes', parent: lane('HR department'), jobType: 'book-vacation' },
+  { op: 'add', type: 'userTask', id: 'T_Info', name: 'Read rejection', after: 'G_Ok', flowName: 'no', parent: lane('Employee') },
+  { op: 'add', type: 'exclusiveGateway', id: 'G_Join', after: 'T_Book' },
   { op: 'connect', source: 'T_Info', target: 'G_Join' },
-  { op: 'add', type: 'endEvent', id: 'E_1', name: 'Antrag bearbeitet', after: 'G_Join' },
-  { op: 'add', type: 'participant', id: 'P_Kasse', name: 'Lohnabrechnung (extern)', expanded: false },
-  { op: 'connect', source: 'T_Buchen', target: 'P_Kasse', name: 'Urlaubstage' },
+  { op: 'add', type: 'endEvent', id: 'E_1', name: 'Request handled', after: 'G_Join' },
+  { op: 'add', type: 'participant', id: 'P_Payroll', name: 'Payroll (external)', expanded: false },
+  { op: 'connect', source: 'T_Book', target: 'P_Payroll', name: 'Vacation days' },
 ] });
 await call('check_diagram', { file: f2 });
 const xml2 = fs.readFileSync(f2, 'utf8');
-expect('3 Lanes', (xml2.match(/<bpmn:lane /g) ?? []).length === 3);
-expect('Nachrichtenfluss', xml2.includes('bpmn:messageFlow'));
-// Elemente in Pools bearbeiten (im alten Datei-Modus unsichtbar)
-await call('update_element', { file: f2, id: 'T_Buchen', properties: { retries: '3' } });
-expect('Pool-Element bearbeitet', /type="book-vacation" retries="3"/.test(fs.readFileSync(f2, 'utf8')));
+expect('3 lanes', (xml2.match(/<bpmn:lane /g) ?? []).length === 3);
+expect('message flow', xml2.includes('bpmn:messageFlow'));
+// Edit elements inside pools
+await call('update_element', { file: f2, id: 'T_Book', properties: { retries: '3' } });
+expect('pool element edited', /type="book-vacation" retries="3"/.test(fs.readFileSync(f2, 'utf8')));
 if (out) {
-  fs.copyFileSync(f2, `${out}-urlaub.bpmn`);
+  fs.copyFileSync(f2, `${out}-vacation.bpmn`);
   const s2 = await call('screenshot_diagram', { file: f2 }, { quiet: true });
-  fs.writeFileSync(`${out}-urlaub.png`, Buffer.from(s2.content[0].data, 'base64'));
+  fs.writeFileSync(`${out}-vacation.png`, Buffer.from(s2.content[0].data, 'base64'));
 }
 
-// ---------- 4. Vorhandene Datei aus dem alten Datei-Modus weiterbearbeiten ----------
-const f3 = path.join(dir, 'beispiel.bpmn');
-fs.copyFileSync(path.join(ROOT, 'beispiel.bpmn'), f3);
+// ---------- 4. Continue editing an existing file ----------
+const f3 = path.join(dir, 'example.bpmn');
+fs.copyFileSync(path.join(ROOT, 'example.bpmn'), f3);
 await call('describe_diagram', { file: f3 }, { quiet: true });
 await call('relayout', { file: f3 });
 
 await client.close();
-console.log(failed ? `\n${failed} FEHLER` : '\nalles ok', '–', dir);
+console.log(failed ? `\n${failed} ERRORS` : '\nall ok', '–', dir);
 process.exitCode = failed ? 1 : 0;
