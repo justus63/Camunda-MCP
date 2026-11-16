@@ -277,20 +277,37 @@ function* flowGen(ctx, cid, lanes) {
   const key = (x) => x.lane * 2 + (x.sep !== undefined ? 1 : 0);
   const index = (l) => l.forEach((x, j) => (x.ord = j));
   layers.forEach((l) => { l.sort((a, b) => key(a) - key(b)); index(l); });
+  // Nachrichtenflüsse verlassen den Pool senkrecht nach oben bzw. unten: alles, was in derselben Spalte darüber
+  // bzw. darunter liegt (Elemente, durchlaufende Sequenzflüsse), wird gekreuzt. Solche Elemente daher an den Rand ihrer Lane ziehen.
+  const msgDir = (x) => (x.real && ctx.msg ? ctx.msg.get(x.id) ?? x.be?.reduce((m, b) => ({ ...m, ...ctx.msg.get(b.id) }), undefined) : undefined);
+  const msgNodes = [...N.values()].filter((x) => { const m = msgDir(x); return m && (m.up || m.down) && !(m.up && m.down); });
+  const msgCost = () => {
+    let c = 0;
+    for (const x of msgNodes) {
+      const m = msgDir(x), l = layers[x.layer];
+      for (const o of l) if (o !== x && o.sep === undefined && !o.strut && (m.up ? o.ord < x.ord : o.ord > x.ord)) c += o.real ? 2 : 1;
+    }
+    return c;
+  };
   const crossings = () => {
     let c = 0;
     for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++) {
       const p = segs[i], q = segs[j];
       if (p.a.layer === q.a.layer && (p.a.ord - q.a.ord) * (p.b.ord - q.b.ord) < 0) c++;
     }
-    return c;
+    return c + msgCost();
   };
   let best = layers.map((l) => [...l]), bestC = crossings();
   for (let it = 0; it < 24 && bestC > 0; it++) {
     const fw = it % 2 === 0;
     for (let k = 1; k < layers.length; k++) {
       const l = layers[fw ? k : layers.length - 1 - k];
-      for (const x of l) { const ns = fw ? x.left : x.right; x.bc = ns.length ? ns.reduce((s, o) => s + o.ord, 0) / ns.length : x.ord; }
+      for (const x of l) {
+        const ns = fw ? x.left : x.right;
+        x.bc = ns.length ? ns.reduce((s, o) => s + o.ord, 0) / ns.length : x.ord;
+        const m = msgDir(x);
+        if (m && m.up !== m.down) x.bc += m.up ? -0.6 : 0.6; // Richtung Partner-Pool
+      }
       l.sort((a, b) => key(a) - key(b) || a.bc - b.bc);
       index(l);
     }
@@ -589,22 +606,39 @@ function orderPools(pools, weight, explicit) {
     return [...pools].sort((a, b) => pos(a) - pos(b));
   }
   const n = pools.length;
-  if (n < 3 || n > 7 || !weight.size) return pools;
+  if (n < 3 || !weight.size) return pools;
   const w = (a, b) => weight.get(`${Math.min(a, b)}|${Math.max(a, b)}`) ?? 0;
-  let best = null, bestCost = Infinity;
-  const perm = (rest, acc) => {
-    if (!rest.length) {
-      let cost = 0;
-      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-        cost += w(acc[i], acc[j]) * (j - i) * 1000;
-        if (acc[i] > acc[j]) cost += 1; // bei Gleichstand die ursprüngliche Reihenfolge behalten
-      }
-      if (cost < bestCost) { bestCost = cost; best = [...acc]; }
-      return;
+  // Ein Nachrichtenfluss kreuzt die Sequenzflüsse jedes ausmodellierten Pools, durch den er läuft.
+  // Zugeklappte Pools (schmale Black Box ohne Inhalt) kosten beim Durchqueren fast nichts.
+  const pass = pools.map((p) => (p.expanded === false ? 0.05 : 1));
+  const costOf = (acc) => {
+    let cost = 0;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      const ww = w(acc[i], acc[j]);
+      if (ww) { let between = 0; for (let k = i + 1; k < j; k++) between += pass[acc[k]]; cost += ww * (1 + between) * 1000; }
+      if (acc[i] > acc[j]) cost += 1; // bei Gleichstand die ursprüngliche Reihenfolge behalten
     }
-    rest.forEach((x, i) => perm([...rest.slice(0, i), ...rest.slice(i + 1)], [...acc, x]));
+    return cost;
   };
-  perm(pools.map((_, i) => i), []);
+  let best = pools.map((_, i) => i), bestCost = costOf(best);
+  if (n <= 8) {
+    const perm = (rest, acc) => {
+      if (!rest.length) { const c = costOf(acc); if (c < bestCost) { bestCost = c; best = [...acc]; } return; }
+      rest.forEach((x, i) => perm([...rest.slice(0, i), ...rest.slice(i + 1)], [...acc, x]));
+    };
+    perm(pools.map((_, i) => i), []);
+  } else {
+    // Viele Pools: Element herausnehmen und an der besten Stelle wieder einsetzen, bis sich nichts mehr verbessert.
+    for (let improved = true; improved; ) {
+      improved = false;
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        const cand = [...best]; const [x] = cand.splice(i, 1); cand.splice(j, 0, x);
+        const c = costOf(cand);
+        if (c < bestCost) { bestCost = c; best = cand; improved = true; }
+      }
+    }
+  }
   return best.map((i) => pools[i]);
 }
 
@@ -1017,6 +1051,7 @@ export function computeLayout(graph, opts = {}) {
   }
 
   straighten(out, graph);
+  separateOverlaps(out, graph);
   const b = bounds(out);
   shift(out, 160 - b.x, 80 - b.y);
   const round = (o) => { for (const k of Object.keys(o)) o[k] = Math.round(o[k]); };
@@ -1055,5 +1090,71 @@ function straighten(out, graph) {
       }
     }
     out.edges[e.id] = w;
+  }
+}
+
+// Liegen zwei Verbindungen ein Stück übereinander (gleicher Kanal), ist nicht mehr zu erkennen, welche wohin führt.
+// Dann einen inneren Abschnitt einer der beiden seitlich verschieben – Anfang und Ende bleiben, der Verlauf bleibt rechtwinklig.
+// Gewählt wird die Verschiebung mit den wenigsten neuen Kreuzungen, die durch kein Element läuft.
+function separateOverlaps(out, graph) {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const E = graph.edges.filter((e) => (e.type === 'SequenceFlow' || e.type === 'MessageFlow') && out.edges[e.id]?.length > 1);
+  const solid = Object.entries(out.shapes).filter(([id]) => { const n = byId.get(id); return n && !isContainer(n) && n.type !== 'Group'; });
+  const inside = (r, p) => p.x > r.x + 2 && p.x < r.x + r.width - 2 && p.y > r.y + 2 && p.y < r.y + r.height - 2;
+  const hitsBox = (a, b, r) => { const n = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 4)); for (let i = 0; i <= n; i++) if (inside(r, { x: a.x + ((b.x - a.x) * i) / n, y: a.y + ((b.y - a.y) * i) / n })) return true; return false; };
+  const cross = (a, b, c, d) => { const o = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)); return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0; };
+  const over = (a, b, c, d) => {
+    for (const [u, v] of [['x', 'y'], ['y', 'x']]) {
+      if (a[u] === b[u] && c[u] === d[u] && Math.abs(a[u] - c[u]) < 1) {
+        const lo = Math.max(Math.min(a[v], b[v]), Math.min(c[v], d[v])), hi = Math.min(Math.max(a[v], b[v]), Math.max(c[v], d[v]));
+        if (hi - lo > 6) return true;
+      }
+    }
+    return false;
+  };
+  const shared = (p, q) => p.source === q.source || p.target === q.target || p.source === q.target || p.target === q.source;
+  // Kosten einer Linienführung w für Verbindung e gegenüber allen anderen
+  const cost = (e, w) => {
+    let c = 0;
+    for (const [id, r] of solid) if (id !== e.source && id !== e.target && byId.get(e.source)?.host !== id && w.some((p, i) => i < w.length - 1 && hitsBox(p, w[i + 1], r))) c += 1000;
+    for (const [id, r] of Object.entries(out.labels)) if (id !== e.id && w.some((p, i) => i < w.length - 1 && hitsBox(p, w[i + 1], r))) c += 20;
+    for (let i = 0; i < w.length - 1; i++) { const len = Math.abs(w[i + 1].x - w[i].x) + Math.abs(w[i + 1].y - w[i].y); if (len > 0 && len <= STEP) c += 30; } // kein neuer Knick
+    for (const f of E) {
+      if (f === e) continue;
+      const v = out.edges[f.id], sh = shared(e, f);
+      for (let i = 0; i < w.length - 1; i++) for (let j = 0; j < v.length - 1; j++) {
+        if (cross(w[i], w[i + 1], v[j], v[j + 1])) c += 1;
+        if (!sh && over(w[i], w[i + 1], v[j], v[j + 1])) c += 50;
+      }
+    }
+    return c;
+  };
+  const overlapping = (e) => E.some((f) => f !== e && !shared(e, f) && out.edges[e.id].some((p, i, w) => i < w.length - 1 && out.edges[f.id].some((q, j, v) => j < v.length - 1 && over(p, w[i + 1], q, v[j + 1]))));
+  const crossing = (e) => E.some((f) => f !== e && out.edges[e.id].some((p, i, w) => i < w.length - 1 && out.edges[f.id].some((q, j, v) => j < v.length - 1 && cross(p, w[i + 1], q, v[j + 1]))));
+  const hitting = (e) => solid.some(([id, r]) => id !== e.source && id !== e.target && byId.get(e.source)?.host !== id && out.edges[e.id].some((p, i, w) => i < w.length - 1 && hitsBox(p, w[i + 1], r)));
+  for (let round = 0; round < 3; round++) {
+    let changed = false;
+    for (const e of E) {
+      if (!overlapping(e) && !crossing(e) && !hitting(e)) continue;
+      const w = out.edges[e.id];
+      let best = { c: cost(e, w), w: null };
+      for (let i = 1; i < w.length - 2; i++) {
+        const vert = w[i].x === w[i + 1].x, horiz = w[i].y === w[i + 1].y;
+        if (!vert && !horiz) continue;
+        const k = vert ? 'x' : 'y';
+        // feste Schritte oder Einrasten auf den parallelen Nachbarabschnitt (entfernt eine Stufe ganz)
+        const snaps = [w[i - 1][k] - w[i][k], w[i + 2][k] - w[i][k]].filter((d) => d && Math.abs(d) <= 60);
+        for (const d of [...snaps, 10, -10, 20, -20, 30, -30, 45, -45]) {
+          const moved = w.map((p, j) => (j === i || j === i + 1 ? { ...p, [k]: p[k] + d } : { ...p }));
+          const dd = moved.filter((p, j) => !j || p.x !== moved[j - 1].x || p.y !== moved[j - 1].y);
+          const cand = dd.filter((p, j) => j === 0 || j === dd.length - 1 || !((dd[j - 1].x === p.x && p.x === dd[j + 1].x) || (dd[j - 1].y === p.y && p.y === dd[j + 1].y)));
+          if (cand.length < 2) continue;
+          const c = cost(e, cand) + Math.abs(d) / 100; // bei Gleichstand die kleinere Verschiebung
+          if (c < best.c) best = { c, w: cand };
+        }
+      }
+      if (best.w) { out.edges[e.id] = best.w; changed = true; }
+    }
+    if (!changed) break;
   }
 }

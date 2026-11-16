@@ -82,6 +82,21 @@ expect('Prüfung meldet mini-stufe', checkDiagram(g).problems.some((p) => p.rule
 const lay = computeLayout(g);
 expect('Layout erzeugt keine Stufe', Object.values(lay.edges).every((w) => !miniSteps(w).length));
 
+// ---------- Pool-Reihenfolge: zugeklappter Pool, der nur mit der Engine spricht, gehört neben die Engine ----------
+{
+  const P = (id, expanded) => ({ id, type: 'Participant', name: id, x: 0, y: 0, width: 600, height: expanded ? 200 : 60, expanded });
+  const T = (id, parent) => ({ id, type: 'Task', name: `${id} prüfen`, parent, x: 0, y: 0, width: 100, height: 80 });
+  const S = (id, parent, type = 'StartEvent') => ({ id, type, name: id, parent, x: 0, y: 0, width: 36, height: 36 });
+  const nodes = [P('X', false), P('M', true), P('E', true), S('m0', 'M'), T('m1', 'M'), T('m2', 'M'), S('m3', 'M', 'EndEvent'), S('e0', 'E'), T('e1', 'E'), T('e2', 'E'), S('e3', 'E', 'EndEvent')];
+  const sf = (id, s, t) => ({ id, type: 'SequenceFlow', source: s, target: t, waypoints: [] });
+  const mf = (id, s, t) => ({ id, type: 'MessageFlow', source: s, target: t, waypoints: [] });
+  const edges = [sf('a', 'm0', 'm1'), sf('b', 'm1', 'm2'), sf('c', 'm2', 'm3'), sf('d', 'e0', 'e1'), sf('e', 'e1', 'e2'), sf('f', 'e2', 'e3'), mf('g', 'm1', 'e1'), mf('h', 'e2', 'm2'), mf('i', 'e1', 'X'), mf('j', 'X', 'e2')];
+  const l = computeLayout({ root: { type: 'Collaboration' }, nodes, edges });
+  const ys = ['X', 'M', 'E'].map((id) => l.shapes[id].y);
+  const order = ['X', 'M', 'E'].sort((p, q) => l.shapes[p].y - l.shapes[q].y).join('');
+  expect(`zugeklappter Pool liegt neben seinem einzigen Partner (Reihenfolge ${order})`, Math.abs(order.indexOf('X') - order.indexOf('E')) === 1 && ys.every(Number.isFinite));
+}
+
 // ---------- Live-Modus: Drill-down-Ebene im Modeler ----------
 const live = await startLive(undefined, 17994);
 const lr = await live.call('live_batch', { layout: true, operations: [
