@@ -4,7 +4,7 @@
  * - führt dessen Befehle über bpmn-js "modeling" aus, d. h. mit Undo/Redo
  */
 (function () {
-  var VERSION = 3;
+  var VERSION = 5;
   var PORT = window.__BPMN_MCP_PORT || 17877;
   var URL = 'ws://127.0.0.1:' + PORT;
 
@@ -88,6 +88,16 @@
     if (!e) throw new Error('Element nicht gefunden: ' + id);
     return e;
   }
+  // Pool/Lane/Teilprozess über ID oder (eindeutigen) Namen finden – spart einen describe-Aufruf.
+  function container(inj, ref) {
+    var reg = inj.get('elementRegistry'), e = reg.get(ref);
+    if (e) return e;
+    var hits = reg.filter(function (x) {
+      return x.type !== 'label' && x.businessObject && x.businessObject.name === ref && (isA(x, 'bpmn:Participant') || isA(x, 'bpmn:Lane') || isA(x, 'bpmn:SubProcess'));
+    });
+    if (hits.length === 1) return hits[0];
+    throw new Error(hits.length ? 'Name "' + ref + '" ist nicht eindeutig (' + hits.map(function (h) { return h.id; }).join(', ') + ') – ID angeben.' : 'Element nicht gefunden: ' + ref);
+  }
   function shapesIn(c) { return c.children.filter(function (k) { return !k.waypoints && k.type !== 'label'; }); }
   function box(list) {
     if (!list.length) return null;
@@ -115,6 +125,19 @@
     while (bo.$parent) bo = bo.$parent;
     return bo;
   }
+
+  // Ausführungsplattform des Diagramms: 'camunda7' (camunda:-Erweiterungen) oder 'camunda8' (zeebe:-Erweiterungen).
+  function platformOf(inj) {
+    var defs = definitionsOf(inj), v;
+    try { v = defs.get('modeler:executionPlatform'); } catch (e) { /* egal */ }
+    v = v || (defs.$attrs && defs.$attrs['modeler:executionPlatform']);
+    if (v) return /cloud|zeebe|8/i.test(v) ? 'camunda8' : 'camunda7';
+    var moddle = inj.get('moddle'), hasC = !!moddle.getPackage('camunda'), hasZ = !!moddle.getPackage('zeebe');
+    if (hasC !== hasZ) return hasC ? 'camunda7' : 'camunda8';
+    var a = defs.$attrs || {};
+    return a['xmlns:camunda'] && !a['xmlns:zeebe'] ? 'camunda7' : 'camunda8';
+  }
+  function isC7(inj) { return platformOf(inj) === 'camunda7'; }
 
   function setEventDefinition(inj, element, spec) {
     var bo = element.businessObject;
@@ -152,7 +175,7 @@
       }
       if (spec.code && spec.type === 'error') modeling.updateModdleProperties(element, root, { errorCode: spec.code });
       if (spec.code && spec.type === 'escalation') modeling.updateModdleProperties(element, root, { escalationCode: spec.code });
-      if (spec.correlationKey && spec.type === 'message') setExt(inj, element, root, 'zeebe:Subscription', { correlationKey: spec.correlationKey });
+      if (spec.correlationKey && spec.type === 'message' && !isC7(inj)) setExt(inj, element, root, 'zeebe:Subscription', { correlationKey: spec.correlationKey });
       def[refProp] = root;
     }
     def.$parent = bo;
@@ -187,7 +210,8 @@
     var old = extOf(bo, type);
     if (props) {
       var merged = {};
-      if (old && !make) Object.keys(props).forEach(function (k) { if (old.get(k) !== undefined) merged[k] = old.get(k); });
+      // vorhandene Attribute behalten (z. B. type, wenn nur retries geändert wird)
+      if (old && !make) old.$descriptor.properties.forEach(function (d) { if (old.get(d.name) !== undefined) merged[d.name] = old.get(d.name); });
       var neu = make ? make(f) : f.create(type, assign(merged, props));
       values.push(neu);
     }
@@ -202,7 +226,10 @@
     return out;
   }
   function setProperties(inj, e, pr) {
+    if (isC7(inj)) return setProperties7(inj, e, pr);
     var bo = e.businessObject, v;
+    var only7 = Object.keys(pr).filter(function (k) { return /^(class|delegateExpression|expression|topic|formKey|formRef|formFields|scriptFormat|taskListeners|executionListeners|historyTimeToLive|asyncBefore|asyncAfter|mapDecisionResult|initiator)$/.test(k); });
+    if (only7.length) throw new Error('Nur in Camunda-7-Diagrammen möglich: ' + only7.join(', ') + ' (dieses Diagramm ist Camunda 8).');
     if ((v = pickDefined(pr, ['retries']))) setExt(inj, e, bo, 'zeebe:TaskDefinition', v);
     if ((v = pickDefined(pr, ['assignee', 'candidateGroups', 'candidateUsers']))) setExt(inj, e, bo, 'zeebe:AssignmentDefinition', v);
     if ((v = pickDefined(pr, ['dueDate', 'followUpDate']))) setExt(inj, e, bo, 'zeebe:TaskSchedule', v);
@@ -230,13 +257,171 @@
     }
   }
 
+  // ---------- Camunda 7 (camunda:-Attribute und -Erweiterungen) ----------
+  function val(v) { return v === '' || v === null ? undefined : v; }
+  function need7(bo, re, what) { if (!re.test(bo.$type)) throw new Error(what + ' geht nicht bei ' + short(bo.$type) + '.'); }
+  function processOf(e) {
+    var bo = e.businessObject;
+    return bo.$type === 'bpmn:Participant' ? bo.processRef : bo.$type === 'bpmn:Process' ? bo : null;
+  }
+  function adopt(parent, kids) { (kids || []).forEach(function (k) { if (k) k.$parent = parent; }); return parent; }
+  function setExtAll(inj, element, bo, type, list) {
+    var f = inj.get('bpmnFactory');
+    var values = ((bo.extensionElements && bo.extensionElements.values) || []).filter(function (v) { return v.$type !== type; }).concat(list);
+    var ext = adopt(f.create('bpmn:ExtensionElements', { values: values }), values);
+    ext.$parent = bo;
+    inj.get('modeling').updateModdleProperties(element, bo, { extensionElements: ext });
+  }
+  function listener7(f, type, l) {
+    var a = { event: l.event || (type === 'camunda:TaskListener' ? 'create' : 'start') };
+    ['class', 'delegateExpression', 'expression'].forEach(function (k) { if (l[k]) a[k] = l[k]; });
+    var li = f.create(type, a);
+    if (l.script) adopt(li, [li.script = f.create('camunda:Script', { scriptFormat: l.scriptFormat || 'groovy', value: l.script })]);
+    else if (!l['class'] && !l.delegateExpression && !l.expression) throw new Error('Listener braucht class, delegateExpression, expression oder script.');
+    return li;
+  }
+  function formData7(f, fields) {
+    var fd = f.create('camunda:FormData', {
+      fields: fields.map(function (d) {
+        if (!d.id) throw new Error('formFields: jedes Feld braucht eine "id" (= Name der Prozessvariable).');
+        var a = { id: d.id, label: d.label || d.id, type: d.type || (d.values ? 'enum' : 'string') };
+        if (d.defaultValue !== undefined) a.defaultValue = String(d.defaultValue);
+        if (d.datePattern) a.datePattern = d.datePattern;
+        var ff = f.create('camunda:FormField', a), cons = [];
+        if (d.required) cons.push({ name: 'required' });
+        if (d.readonly) cons.push({ name: 'readonly' });
+        ['min', 'max', 'minlength', 'maxlength'].forEach(function (k) { if (d[k] !== undefined) cons.push({ name: k, config: String(d[k]) }); });
+        if (cons.length) {
+          ff.validation = f.create('camunda:Validation', { constraints: cons.map(function (c) { return f.create('camunda:Constraint', c); }) });
+          adopt(ff, [adopt(ff.validation, ff.validation.constraints)]);
+        }
+        if (d.values) {
+          var list = Array.isArray(d.values)
+            ? d.values.map(function (x) { return typeof x === 'string' ? { id: x, name: x } : { id: x.id, name: x.name || x.id }; })
+            : Object.keys(d.values).map(function (k) { return { id: k, name: String(d.values[k]) }; });
+          ff.values = list.map(function (x) { return f.create('camunda:Value', x); });
+          adopt(ff, ff.values);
+        }
+        return ff;
+      }),
+    });
+    return adopt(fd, fd.fields);
+  }
+  function setProperties7(inj, e, pr) {
+    var bo = e.businessObject, modeling = inj.get('modeling'), f = inj.get('bpmnFactory'), up = {};
+    var only8 = Object.keys(pr).filter(function (k) { return /^(retries|headers)$/.test(k); });
+    if (only8.length) throw new Error('Nur in Camunda-8-Diagrammen möglich: ' + only8.join(', ') + ' (dieses Diagramm ist Camunda 7).');
+    var proc = processOf(e), pp = {};
+    if (pr.historyTimeToLive !== undefined) pp['camunda:historyTimeToLive'] = val(String(pr.historyTimeToLive));
+    ['candidateStarterGroups', 'candidateStarterUsers', 'versionTag'].forEach(function (k) { if (pr[k] !== undefined) pp['camunda:' + k] = val(pr[k]); });
+    if (pr.isExecutable !== undefined) pp.isExecutable = !!pr.isExecutable;
+    if (Object.keys(pp).length) {
+      if (!proc) throw new Error('historyTimeToLive/isExecutable/candidateStarter… gehören an den Prozess: ID des Pools oder des Prozesses angeben.');
+      modeling.updateModdleProperties(e, proc, pp);
+    }
+    ['assignee', 'candidateGroups', 'candidateUsers', 'dueDate', 'followUpDate', 'priority'].forEach(function (k) {
+      if (pr[k] !== undefined) { need7(bo, /UserTask/, k); up['camunda:' + k] = val(pr[k]); }
+    });
+    // Formulare: formKey (Embedded Form), formRef (Camunda Form), formFields (Generated Form)
+    var formRef = pr.formRef !== undefined ? pr.formRef : pr.formId;
+    if (pr.formKey !== undefined || formRef !== undefined || pr.formFields) need7(bo, /UserTask|StartEvent/, 'Ein Formular');
+    if (pr.formKey !== undefined) { up['camunda:formKey'] = val(pr.formKey); if (pr.formKey) { up['camunda:formRef'] = undefined; up['camunda:formRefBinding'] = undefined; } }
+    if (formRef !== undefined) { up['camunda:formRef'] = val(formRef); up['camunda:formRefBinding'] = formRef ? pr.formRefBinding || 'latest' : undefined; if (formRef) up['camunda:formKey'] = undefined; }
+    if (pr.formFields) setExtAll(inj, e, bo, 'camunda:FormData', pr.formFields.length ? [formData7(f, pr.formFields)] : []);
+    if (pr.initiator !== undefined) { need7(bo, /StartEvent/, 'initiator'); up['camunda:initiator'] = val(pr.initiator); }
+    // Implementierung: Java-Klasse, Delegate Expression (Spring Bean), Expression oder External Task (topic)
+    if (pickDefined(pr, ['class', 'delegateExpression', 'expression', 'topic'])) {
+      var target = /ServiceTask|SendTask|BusinessRuleTask/.test(bo.$type) ? bo
+        : (/Event$/.test(bo.$type) && bo.eventDefinitions && bo.eventDefinitions[0] && bo.eventDefinitions[0].$type === 'bpmn:MessageEventDefinition') ? bo.eventDefinitions[0] : null;
+      if (!target) throw new Error('class/delegateExpression/expression/topic gehen nur bei Service-, Send-, Business-Rule-Tasks und auslösenden Nachrichtenereignissen, nicht bei ' + short(bo.$type) + '.');
+      var impl = { 'camunda:class': undefined, 'camunda:delegateExpression': undefined, 'camunda:expression': undefined, 'camunda:type': undefined, 'camunda:topic': undefined };
+      if (pr.topic) { impl['camunda:type'] = 'external'; impl['camunda:topic'] = pr.topic; }
+      else if (pr['class']) impl['camunda:class'] = pr['class'];
+      else if (pr.delegateExpression) impl['camunda:delegateExpression'] = pr.delegateExpression;
+      else if (pr.expression) impl['camunda:expression'] = pr.expression;
+      if (target === bo) assign(up, impl); else modeling.updateModdleProperties(e, target, impl);
+    }
+    var decision = pr.decisionRef !== undefined ? pr.decisionRef : pr.decisionId;
+    if (decision !== undefined) { need7(bo, /BusinessRuleTask/, 'decisionRef'); up['camunda:decisionRef'] = val(decision); }
+    if (pr.mapDecisionResult !== undefined) { need7(bo, /BusinessRuleTask/, 'mapDecisionResult'); up['camunda:mapDecisionResult'] = val(pr.mapDecisionResult); }
+    if (pr.script !== undefined || pr.scriptFormat !== undefined || pr.resource !== undefined) {
+      need7(bo, /ScriptTask/, 'script/scriptFormat/resource');
+      up.scriptFormat = pr.scriptFormat || bo.scriptFormat || 'groovy';
+      if (pr.script !== undefined) { up.script = val(pr.script); if (pr.script) up['camunda:resource'] = undefined; }
+      if (pr.resource !== undefined) { up['camunda:resource'] = val(pr.resource); if (pr.resource) up.script = undefined; }
+    }
+    if (pr.resultVariable !== undefined) { need7(bo, /ServiceTask|SendTask|BusinessRuleTask|ScriptTask/, 'resultVariable'); up['camunda:resultVariable'] = val(pr.resultVariable); }
+    var called = pr.calledElement !== undefined ? pr.calledElement : pr.calledProcessId;
+    if (called !== undefined) { need7(bo, /CallActivity/, 'calledElement'); up.calledElement = val(called); up['camunda:calledElementBinding'] = called ? 'latest' : undefined; }
+    if (pr.asyncBefore !== undefined) up['camunda:asyncBefore'] = !!pr.asyncBefore;
+    if (pr.asyncAfter !== undefined) up['camunda:asyncAfter'] = !!pr.asyncAfter;
+    if (Object.keys(up).length) modeling.updateProperties(e, up);
+    if (pr.inputs || pr.outputs) {
+      var oldIo = extOf(bo, 'camunda:InputOutput');
+      var mk = function (type) { return function (m) { return f.create(type, { name: m.name || m.target, value: m.value !== undefined ? m.value : m.source }); }; };
+      var io = f.create('camunda:InputOutput', {
+        inputParameters: pr.inputs ? pr.inputs.map(mk('camunda:InputParameter')) : (oldIo && oldIo.inputParameters) || [],
+        outputParameters: pr.outputs ? pr.outputs.map(mk('camunda:OutputParameter')) : (oldIo && oldIo.outputParameters) || [],
+      });
+      adopt(io, io.inputParameters.concat(io.outputParameters));
+      setExtAll(inj, e, bo, 'camunda:InputOutput', io.inputParameters.length + io.outputParameters.length ? [io] : []);
+    }
+    if (pr.taskListeners) { need7(bo, /UserTask/, 'taskListeners'); setExtAll(inj, e, bo, 'camunda:TaskListener', pr.taskListeners.map(function (l) { return listener7(f, 'camunda:TaskListener', l); })); }
+    if (pr.executionListeners) {
+      var lbo = proc || bo;
+      setExtAll(inj, e, lbo, 'camunda:ExecutionListener', pr.executionListeners.map(function (l) { return listener7(f, 'camunda:ExecutionListener', l); }));
+    }
+  }
+
+  // Kurzfassung der technischen Eigenschaften (für describe und die Prüfung)
+  function propsOf(c7, bo) {
+    var o = {}, x;
+    var g = function (k, from) { try { return (from || bo).get(k); } catch (e) { return undefined; } };
+    if (c7) {
+      ['assignee', 'candidateGroups', 'candidateUsers', 'dueDate', 'formKey', 'formRef', 'class', 'delegateExpression', 'expression', 'topic', 'decisionRef', 'mapDecisionResult', 'resultVariable', 'initiator'].forEach(function (k) {
+        var v = g('camunda:' + k); if (v) o[k] = v;
+      });
+      var md = /Event$/.test(bo.$type) && bo.eventDefinitions && bo.eventDefinitions[0];
+      if (md && md.$type === 'bpmn:MessageEventDefinition') ['class', 'delegateExpression', 'expression', 'topic'].forEach(function (k) { var v = g('camunda:' + k, md); if (v) o[k] = v; });
+      if (bo.scriptFormat) o.scriptFormat = bo.scriptFormat;
+      if (bo.script || g('camunda:resource')) o.script = g('camunda:resource') || 'inline';
+      if (bo.calledElement) o.calledElement = bo.calledElement;
+      if (g('camunda:asyncBefore')) o.asyncBefore = true;
+      if ((x = extOf(bo, 'camunda:FormData')) && x.fields) o.formFields = x.fields.map(function (d) { return d.id; });
+      var ext = (bo.extensionElements && bo.extensionElements.values) || [];
+      var tl = ext.filter(function (v) { return v.$type === 'camunda:TaskListener'; }).length, el2 = ext.filter(function (v) { return v.$type === 'camunda:ExecutionListener'; }).length;
+      if (tl) o.taskListeners = tl;
+      if (el2) o.executionListeners = el2;
+      if (bo.loopCharacteristics && g('camunda:collection', bo.loopCharacteristics)) o.collection = g('camunda:collection', bo.loopCharacteristics);
+    } else {
+      if ((x = extOf(bo, 'zeebe:AssignmentDefinition'))) { if (x.assignee) o.assignee = x.assignee; if (x.candidateGroups) o.candidateGroups = x.candidateGroups; }
+      if ((x = extOf(bo, 'zeebe:FormDefinition')) && x.formId) o.formId = x.formId;
+      if ((x = extOf(bo, 'zeebe:CalledDecision')) && x.decisionId) o.decisionId = x.decisionId;
+      if ((x = extOf(bo, 'zeebe:CalledElement')) && x.processId) o.calledProcessId = x.processId;
+      if (extOf(bo, 'zeebe:Script')) o.script = 'inline';
+    }
+    return Object.keys(o).length ? o : undefined;
+  }
+  function processInfo(c7, proc) {
+    if (!proc) return undefined;
+    var o = { processId: proc.id, isExecutable: !!proc.isExecutable };
+    if (c7) { try { var h = proc.get('camunda:historyTimeToLive'); if (h) o.historyTimeToLive = h; } catch (e) { /* egal */ } }
+    return o;
+  }
+
   function setLoop(inj, e, loop) {
     var f = inj.get('bpmnFactory'), lc;
     if (loop.type === 'loop') lc = f.create('bpmn:StandardLoopCharacteristics');
     else if (loop.type === 'parallel' || loop.type === 'sequential') {
       lc = f.create('bpmn:MultiInstanceLoopCharacteristics', { isSequential: loop.type === 'sequential' });
       var z = pickDefined(loop, ['inputCollection', 'inputElement', 'outputCollection', 'outputElement']);
-      if (z) {
+      if (isC7(inj)) {
+        var col = loop.collection || loop.inputCollection, ev = loop.elementVariable || loop.inputElement;
+        if (col) lc.set('camunda:collection', col);
+        if (ev) lc.set('camunda:elementVariable', ev);
+        if (loop.cardinality !== undefined) adopt(lc, [lc.loopCardinality = f.create('bpmn:FormalExpression', { body: String(loop.cardinality) })]);
+        if (loop.completionCondition) adopt(lc, [lc.completionCondition = f.create('bpmn:FormalExpression', { body: loop.completionCondition })]);
+      } else if (z) {
         var zl = f.create('zeebe:LoopCharacteristics', z);
         lc.extensionElements = f.create('bpmn:ExtensionElements', { values: [zl] });
         lc.extensionElements.$parent = lc;
@@ -297,6 +482,7 @@
       else modeling.updateProperties(e, { name: text });
     }
     if (p.jobType !== undefined) {
+      if (isC7(inj)) throw new Error('jobType gibt es nur in Camunda 8. Camunda 7: properties.class, delegateExpression, expression oder topic (External Task) verwenden.');
       if (!/ServiceTask|SendTask|BusinessRuleTask|ScriptTask|EndEvent|IntermediateThrowEvent/.test(bo.$type)) throw new Error('jobType geht nicht bei ' + short(bo.$type) + '.');
       setExt(inj, e, bo, 'zeebe:TaskDefinition', { type: p.jobType });
     }
@@ -315,6 +501,19 @@
       else throw new Error('interrupting geht nur bei Boundary- und Start-Events.');
     }
     if (p.loop) setLoop(inj, e, p.loop);
+    if (p.state !== undefined) {
+      if (!/DataObjectReference|DataStoreReference/.test(bo.$type)) throw new Error('state geht nur bei Datenobjekten/-speichern.');
+      var st = p.state ? f.create('bpmn:DataState', { name: p.state }) : undefined;
+      if (st) st.$parent = bo;
+      modeling.updateModdleProperties(e, bo, { dataState: st });
+      // bpmn-js zeichnet den Zustand nicht: zusätzlich sichtbar als "Name [Zustand]"
+      var base = (bo.name || '').replace(/\s*\[[^\]]*\]\s*$/, '');
+      modeling.updateProperties(e, { name: p.state ? base + ' [' + p.state + ']' : base });
+    }
+    if (p.collection !== undefined) {
+      if (bo.$type !== 'bpmn:DataObjectReference' || !bo.dataObjectRef) throw new Error('collection geht nur bei Datenobjekten.');
+      modeling.updateModdleProperties(e, bo.dataObjectRef, { isCollection: !!p.collection });
+    }
     if (p.color) modeling.setColor([e], { fill: p.color.fill, stroke: p.color.stroke });
     if (p.newId) modeling.updateProperties(e, { id: p.newId });
     return e;
@@ -383,7 +582,7 @@
 
   // ---------- Graph (für Layout, Prüfung und describe) ----------
   function graph(inj) {
-    var root = rootOf(inj), nodes = [], edges = [];
+    var root = rootOf(inj), nodes = [], edges = [], c7 = isC7(inj);
     var all = inj.get('elementRegistry').filter(function (e) { return e !== root && e.parent && e.type !== 'label' && !e.labelTarget && e.businessObject && topOf(e) === root; });
     var topLanes = all.filter(function (e) { return isA(e, 'bpmn:Lane') && isA(e.parent, 'bpmn:Participant'); });
     function lb(e) { return e.label ? { x: e.label.x, y: e.label.y, width: e.label.width, height: e.label.height } : undefined; }
@@ -405,10 +604,12 @@
         x: e.x, y: e.y, width: e.width, height: e.height,
         parent: e.parent !== root ? e.parent.id : null, lane: lane && type !== 'Lane' ? lane.id : undefined, host: e.host && e.host.id,
         expanded: /SubProcess|Transaction/.test(type) ? !!(e.di && e.di.isExpanded) : type === 'Participant' ? !!bo.processRef : undefined,
-        collapsed: /SubProcess|Transaction/.test(type) && !(e.di && e.di.isExpanded) ? true : undefined,
+        collapsed: (/SubProcess|Transaction/.test(type) && !(e.di && e.di.isExpanded)) || (type === 'Participant' && !bo.processRef) ? true : undefined,
         triggeredByEvent: bo.triggeredByEvent, label: lb(e), eventDefinition: summarizeEventDefinition(bo), jobType: td && td.type,
         loop: lc ? (lc.$type === 'bpmn:StandardLoopCharacteristics' ? 'loop' : lc.isSequential ? 'sequential' : 'parallel') : undefined,
         nonInterrupting: bo.cancelActivity === false || bo.isInterrupting === false,
+        props: propsOf(c7, bo), process: type === 'Participant' ? processInfo(c7, bo.processRef) : undefined,
+        state: bo.dataState && bo.dataState.name, collection: bo.dataObjectRef && bo.dataObjectRef.isCollection,
       }));
     });
     function topLanesParent(l) { return l.parent; }
@@ -419,7 +620,11 @@
       if (g.type !== 'Group') return;
       g.members = nodes.filter(function (n) { return n !== g && !/^(Participant|Lane|Group)$/.test(n.type) && centerIn(n, g); }).map(function (n) { return n.id; });
     });
-    return { root: { id: root.id, type: short(root.businessObject.$type), name: root.businessObject.name }, nodes: nodes, edges: edges };
+    var rbo = root.businessObject;
+    return {
+      root: clean({ id: root.id, type: short(rbo.$type), name: rbo.name, platform: c7 ? 'camunda7' : 'camunda8', process: rbo.$type === 'bpmn:Process' ? processInfo(c7, rbo) : undefined }),
+      nodes: nodes, edges: edges,
+    };
   }
 
   // ---------- Elemente anlegen ----------
@@ -433,7 +638,7 @@
   function resolveParent(inj, p) {
     var root = rootOf(inj);
     if (p.parent) {
-      var c = el(inj, p.parent), lane = null;
+      var c = container(inj, p.parent), lane = null;
       if (isA(c, 'bpmn:Lane')) { lane = c; while (isA(c, 'bpmn:Lane')) c = c.parent; }
       return { container: c, lane: lane, explicit: true };
     }
@@ -459,18 +664,36 @@
       pos = { x: b ? b.x + shape.width / 2 : 500, y: b ? b.y + b.height + 70 + shape.height / 2 : 250 };
     }
     var created = modeling.createShape(shape, pos, root);
+    var proc = created.businessObject.processRef;
+    if (proc && p.processId && proc.id !== p.processId) {
+      var ids = inj.get('moddle').ids;
+      if (ids && ids.assigned(p.processId)) throw new Error('ID existiert schon: ' + p.processId);
+      if (ids) { ids.unclaim(proc.id); ids.claim(p.processId, proc); }
+      proc.id = p.processId;
+    }
+    if (proc && p.executable !== undefined) {
+      proc.isExecutable = !!p.executable;
+      if (isC7(inj)) {
+        if (p.executable && !proc.get('camunda:historyTimeToLive')) proc.set('camunda:historyTimeToLive', '180');
+        if (!p.executable) proc.set('camunda:historyTimeToLive', undefined);
+      }
+    }
     var lanes;
     if (p.lanes && p.lanes.length > 1 && p.expanded !== false) {
       modeling.splitLane(created, p.lanes.length);
       lanes = shapesIn(created).filter(function (k) { return isA(k, 'bpmn:Lane'); }).sort(function (a, c) { return a.y - c.y; });
-      lanes.forEach(function (l, i) { if (p.lanes[i]) modeling.updateProperties(l, { name: p.lanes[i] }); });
+      lanes.forEach(function (l, i) {
+        var spec = p.lanes[i];
+        if (!spec) return;
+        modeling.updateProperties(l, typeof spec === 'string' ? { name: spec } : clean({ name: spec.name, id: spec.id }));
+      });
     }
     return { created: created, extra: lanes ? { lanes: lanes.map(function (l) { return { id: l.id, name: l.businessObject.name }; }) } : {} };
   }
 
   function addLane(inj, p) {
     var modeling = inj.get('modeling');
-    var target = el(inj, p.parent || p.after || '');
+    var target = container(inj, p.parent || p.after || '');
     if (!isA(target, 'bpmn:Participant') && !isA(target, 'bpmn:Lane')) throw new Error('Lane braucht "parent" = Pool oder Lane.');
     var lane = modeling.addLane(target, p.position === 'top' ? 'top' : 'bottom');
     if (p.name) modeling.updateProperties(lane, { name: p.name });
@@ -492,6 +715,8 @@
     var attrs = assign({ type: type, businessObject: bo }, ATTRS[p.type]);
     if (p.expanded === false) attrs.isExpanded = false;
     if (p.type === 'boundaryEvent' && p.interrupting === false) attrs.cancelActivity = false;
+    // Ereignistyp schon beim Anlegen setzen: sonst verbieten die BPMN-Regeln z. B. die Verbindung vom ereignisbasierten Gateway.
+    if (p.eventDefinition && EVENT_DEF_TYPES[p.eventDefinition.type] && /Event$/.test(type)) attrs.eventDefinitionType = EVENT_DEF_TYPES[p.eventDefinition.type];
     var created, extra = {}, host = p.attachTo ? el(inj, p.attachTo) : null;
 
     if (p.type === 'participant') {
@@ -518,9 +743,16 @@
       var s = ef.createShape(attrs), where = resolveParent(inj, p), src = p.after ? el(inj, p.after) : null;
       if (src && !where.explicit && !p.position) {
         created = inj.get('autoPlace').append(src, s);
+        if (!(created.incoming || []).some(function (c) { return c.source === src; })) {
+          throw new Error('Verbindung von ' + p.after + ' zu einem ' + p.type + ' ist laut BPMN-Regeln nicht erlaubt' +
+            (isA(src, 'bpmn:EventBasedGateway') ? ' (nach einem ereignisbasierten Gateway folgen nur eintretende Ereignisse mit eventDefinition oder receiveTask).' : '.'));
+        }
       } else {
-        var at = p.position || (src && where.lane
-          ? { x: src.x + src.width + 80 + s.width / 2, y: where.lane.y + where.lane.height / 2 }
+        // Hinter dem Vorgänger auf dessen Mittellinie, damit die Verbindung gerade ist (keine Mini-Stufen);
+        // nur wenn der Vorgänger in einer anderen Lane liegt, auf die Mitte der Ziel-Lane.
+        var inLane = function (l, e) { return l && e.y + e.height / 2 > l.y && e.y + e.height / 2 < l.y + l.height; };
+        var at = p.position || (src
+          ? { x: src.x + src.width + 80 + s.width / 2, y: where.lane && !inLane(where.lane, src) ? where.lane.y + where.lane.height / 2 : src.y + src.height / 2 }
           : freeSpot(inj, where.container, s, where.lane));
         created = modeling.createShape(s, at, where.lane || where.container);
         if (src) { var conn = modeling.connect(src, created); if (!conn) throw new Error('Verbindung von ' + p.after + ' laut BPMN-Regeln nicht erlaubt.'); }
@@ -604,7 +836,7 @@
         var d = p.x !== undefined || p.y !== undefined
           ? { x: p.x !== undefined ? p.x - e.x : 0, y: p.y !== undefined ? p.y - e.y : 0 }
           : { x: p.dx || 0, y: p.dy || 0 };
-        modeling.moveElements(list, d, p.parent ? el(inj, p.parent) : undefined);
+        modeling.moveElements(list, d, p.parent ? container(inj, p.parent) : undefined);
       } else if (p.action === 'resize') {
         modeling.resizeShape(e, { x: p.x !== undefined ? p.x : e.x, y: p.y !== undefined ? p.y : e.y, width: p.width || e.width, height: p.height || e.height });
       } else if (p.action === 'waypoints') {
@@ -631,6 +863,10 @@
 
     screenshot: function (p) {
       return need().get('bpmnjs').saveSVG().then(function (r) { return rasterize(r.svg, p.maxSize || 2000); });
+    },
+
+    svg: function () {
+      return need().get('bpmnjs').saveSVG().then(function (r) { return { svg: r.svg }; });
     },
 
     batch: function (p) {
@@ -666,6 +902,9 @@
       throw err;
     }
   }
+
+  // Direkter Zugang ohne WebSocket: der Datei-Modus (headless.js) ruft die Befehle so auf.
+  window.__bpmnMcp = { call: function (method, params) { return atomic(method, handlers[method], params || {}); } };
 
   // ---------- WebSocket zum MCP-Server ----------
   function start() {

@@ -76,7 +76,17 @@ function bounds(res) {
 }
 
 // ---------- Ablauf innerhalb eines Containers (Prozess, Teilprozess, Pool) ----------
+// Als Generator, damit mehrere Pools gemeinsam ausgerichtet werden können:
+//  1. yield { stage: 'layers', ... }  -> der Aufrufer darf die Spalten (w.layer) der Knoten verschieben
+//  2. yield { stage: 'grid', lw, gap } -> der Aufrufer gibt das (gemeinsame) Spaltenraster zurück
 function layoutFlow(ctx, cid, lanes) {
+  const g = flowGen(ctx, cid, lanes);
+  let r = g.next();
+  while (!r.done) r = g.next();
+  return r.value;
+}
+
+function* flowGen(ctx, cid, lanes) {
   const all = ctx.kids.get(cid) ?? [];
   const res = { shapes: {}, labels: {}, edges: {}, laneY: [], width: 0, height: 0 };
   const flow = all.filter((n) => !isArtifact(n) && n.type !== 'BoundaryEvent' && n.type !== 'Lane' && n.type !== 'Participant');
@@ -106,7 +116,13 @@ function layoutFlow(ctx, cid, lanes) {
   }
   for (const w of N.values()) {
     const lb = w.n.label;
-    if (lb && isEvent(w.n)) w.down += lb.height + 8;
+    // Ereignis mit Nachrichtenfluss nach unten: Beschriftung nach oben (bzw. seitlich), damit die Linie frei bleibt
+    const ms = ctx.msg?.get(w.id);
+    if (lb && isEvent(w.n)) {
+      if (ms?.down && ms?.up) { w.lab = 'side'; w.up = Math.max(w.up, w.h / 2 + lb.height); }
+      else if (ms?.down) { w.lab = 'top'; w.up += lb.height + 8; }
+      else w.down += lb.height + 8;
+    }
     if (lb && isGateway(w.n)) w.up += lb.height + 8;
     if (w.be.length) w.down += 22 + Math.max(0, ...w.be.map((b) => b.label?.height ?? 0));
     w.artBase = w.up;
@@ -158,6 +174,8 @@ function layoutFlow(ctx, cid, lanes) {
     const fo = out.get(v).filter(fwd);
     if (!inn.get(v).filter(fwd).length && fo.length) N.get(v).layer = Math.max(0, Math.min(...fo.map((e) => N.get(e.t).layer)) - 1);
   }
+
+  yield { stage: 'layers', N, E, fwd };
 
   // Hauptpfad bestimmen: längster Weg, der ein echtes Ende erreicht
   const down = new Map(), up = new Map();
@@ -396,21 +414,24 @@ function layoutFlow(ctx, cid, lanes) {
   });
 
   // X-Koordinaten
-  const lw = layers.map((l) => Math.max(20, ...l.filter((x) => x.real).map((x) => x.w)));
-  const xl = [0], gap = [];
+  const lw0 = layers.map((l) => Math.max(20, ...l.filter((x) => x.real).map((x) => x.w)));
+  const gap0 = [];
   const extra = [];
   for (const w of N.values()) {
     // Platz für die Gateway-Beschriftung neben der senkrechten Linie an der oberen Ecke
     const lb = w.n.label, tu = topUse.get(w.id);
     if (!lb || !isGateway(w.n) || !tu) continue;
-    const need = lb.width + 26 - lw[w.layer] / 2, i = tu === 'exit' ? w.layer - 1 : w.layer;
+    const need = lb.width + 26 - lw0[w.layer] / 2, i = tu === 'exit' ? w.layer - 1 : w.layer;
     if (i >= 0) extra[i] = Math.max(extra[i] ?? 0, need);
   }
+  for (const w of N.values()) if (w.lab === 'side') extra[w.layer] = Math.max(extra[w.layer] ?? 0, w.n.label.width + 16);
   for (let i = 0; i < layers.length; i++) {
     const lab = Math.max(0, ...E.filter((e) => fwd(e) && e.label && N.get(e.s).layer === i).map((e) => Math.min(e.label.width, 120) + 24));
-    gap[i] = Math.max(GAP_X, 36 + tracks[i] * TRACK, lab, extra[i] ?? 0);
-    xl[i + 1] = xl[i] + lw[i] + gap[i];
+    gap0[i] = Math.max(GAP_X, 36 + tracks[i] * TRACK, lab, extra[i] ?? 0);
   }
+  const grid = (yield { stage: 'grid', lw: lw0, gap: gap0 }) ?? { lw: lw0, gap: gap0 };
+  const lw = grid.lw, gap = grid.gap, xl = [0];
+  for (let i = 0; i < lw.length; i++) xl[i + 1] = xl[i] + lw[i] + gap[i];
   const xc = (x) => xl[x.layer] + lw[x.layer] / 2;
   const tx = (i, t) => xl[i] + lw[i] + (gap[i] - (tracks[i] - 1) * TRACK) / 2 + t * TRACK;
   const corner = new Map(); // Gateway -> benutzte Ecken
@@ -457,7 +478,7 @@ function layoutFlow(ctx, cid, lanes) {
     let y = side > 0 ? bot + 26 : top - 26;
     for (let hit; (hit = bt[side].find((k) => k.x1 < x2 && k.x2 > x1 && Math.abs(k.y - y) < 16)); ) y = hit.y + side * 16;
     bt[side].push({ x1, x2, y, l1: t.layer, l2: s.layer });
-    const blocked = (x) => (side > 0 ? (isEvent(x.n) && x.n.label) || x.be.length : x.arts.length);
+    const blocked = (x) => (side > 0 ? (isEvent(x.n) && x.n.label && !x.lab) || x.be.length : x.arts.length || x.lab);
     const pts = [];
     if (be) pts.push({ x: be.cx, y: be.cy + 18 }, { x: be.cx, y });
     else if (!blocked(s) && colFree(s.layer, s, s.y, y)) { pts.push({ x: xc(s), y: s.y + (side * s.h) / 2 }, { x: xc(s), y }); use(s, side); }
@@ -472,7 +493,11 @@ function layoutFlow(ctx, cid, lanes) {
     const x = xc(w) - w.w / 2, y = w.y - w.h / 2, lb = w.n.label;
     res.shapes[w.id] = { x, y, width: w.w, height: w.h };
     if (sub.has(w.id)) { const r = sub.get(w.id); merge(res, r, x + (w.w - r.width) / 2, y + 40 + (w.h - 70 - r.height) / 2); }
-    if (lb && isEvent(w.n)) res.labels[w.id] = { x: xc(w) - lb.width / 2, y: w.y + w.h / 2 + 5, width: lb.width, height: lb.height };
+    if (lb && isEvent(w.n)) {
+      res.labels[w.id] = w.lab === 'top' ? { x: xc(w) - lb.width / 2, y: w.y - w.h / 2 - 5 - lb.height, width: lb.width, height: lb.height }
+        : w.lab === 'side' ? { x: xc(w) + w.w / 2 + 4, y: w.y - w.h / 2 - lb.height + 4, width: lb.width, height: lb.height }
+        : { x: xc(w) - lb.width / 2, y: w.y + w.h / 2 + 5, width: lb.width, height: lb.height };
+    }
     if (lb && isGateway(w.n)) {
       res.labels[w.id] = { x: corner.get(w.id)?.top ? (topUse.get(w.id) === 'entry' ? xc(w) + 10 : xc(w) - lb.width - 10) : w.arts.length ? xc(w) - lb.width - 10 : xc(w) - lb.width / 2, y: w.y - w.h / 2 - 6 - lb.height, width: lb.width, height: lb.height };
     }
@@ -489,6 +514,19 @@ function layoutFlow(ctx, cid, lanes) {
     if (b.label) res.labels[b.id] = { x: cx - 8 - b.label.width, y: cy + 21, width: b.label.width, height: b.label.height };
   }
   for (const e of E) if (e.label && res.edges[e.id]) res.labels[e.id] = edgeLabelBox(res.edges[e.id], e.label);
+  // Teilen sich mehrere Ausgänge eines Elements den Anfang der Linie, lägen die Beschriftungen übereinander:
+  // dann jede Beschriftung an die letzte Ecke vor ihrem Ziel setzen.
+  const hits = (a, b) => a.x < b.x + b.width + 2 && b.x < a.x + a.width + 2 && a.y < b.y + b.height + 2 && b.y < a.y + a.height + 2;
+  for (const v of ids) {
+    const sib = out.get(v).filter((e) => res.labels[e.id]);
+    if (!sib.some((a) => sib.some((b) => a !== b && hits(res.labels[a.id], res.labels[b.id])))) continue;
+    for (const e of sib) {
+      const pts = res.edges[e.id], n = pts.length, lb = e.label;
+      if (n < 3 || pts[n - 1].y !== pts[n - 2].y || pts[n - 2].x !== pts[n - 3].x) continue;
+      const c = pts[n - 2], fromAbove = pts[n - 3].y < c.y;
+      res.labels[e.id] = { x: c.x - 6 - lb.width, y: fromAbove ? c.y - lb.height - 4 : c.y + 4, width: lb.width, height: lb.height };
+    }
+  }
   let b = bounds(res), lx = b.x;
   for (const a of loose) {
     res.shapes[a.id] = { x: lx, y: b.y - 40 - a.height, width: a.width, height: a.height };
@@ -499,14 +537,319 @@ function layoutFlow(ctx, cid, lanes) {
   for (const st of struts) res.shapes[st.id] = { x: xl[0], y: st.y - 45, width: 10, height: 90 };
   b = bounds(res);
   for (const st of struts) delete res.shapes[st.id];
-  shift(res, -b.x, -b.y);
+  // Im gemeinsamen Raster bleibt x unverändert, damit die Spalten aller Pools übereinander liegen.
+  shift(res, grid.shared ? 0 : -b.x, -b.y);
+  res.x0 = grid.shared ? b.x : 0;
   res.width = b.width;
   res.height = b.height;
   return res;
 }
 
+// ---------- Pools: Reihenfolge und gemeinsame Spalten entlang der Nachrichtenflüsse ----------
+
+// Pools so stapeln, dass Nachrichtenflüsse möglichst zwischen benachbarten Pools laufen.
+function orderPools(pools, weight, explicit) {
+  if (explicit?.length) {
+    const pos = (p) => { const i = explicit.findIndex((x) => x === p.id || x === p.name); return i < 0 ? explicit.length + pools.indexOf(p) : i; };
+    return [...pools].sort((a, b) => pos(a) - pos(b));
+  }
+  const n = pools.length;
+  if (n < 3 || n > 7 || !weight.size) return pools;
+  const w = (a, b) => weight.get(`${Math.min(a, b)}|${Math.max(a, b)}`) ?? 0;
+  let best = null, bestCost = Infinity;
+  const perm = (rest, acc) => {
+    if (!rest.length) {
+      let cost = 0;
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        cost += w(acc[i], acc[j]) * (j - i) * 1000;
+        if (acc[i] > acc[j]) cost += 1; // bei Gleichstand die ursprüngliche Reihenfolge behalten
+      }
+      if (cost < bestCost) { bestCost = cost; best = [...acc]; }
+      return;
+    }
+    rest.forEach((x, i) => perm([...rest.slice(0, i), ...rest.slice(i + 1)], [...acc, x]));
+  };
+  perm(pools.map((_, i) => i), []);
+  return best.map((i) => pools[i]);
+}
+
+// Spalten aller Pools gemeinsam vergeben: Sequenzfluss = nächste Spalte, Nachrichtenfluss = gleiche Spalte (oder später).
+function alignLayers(stages, msg) {
+  const W = new Map();
+  for (const st of stages) for (const [id, w] of st.N) W.set(id, w);
+  const outE = new Map([...W.keys()].map((id) => [id, []])), inE = new Map([...W.keys()].map((id) => [id, []]));
+  const add = (e) => { outE.get(e.s).push(e); inE.get(e.t).push(e); };
+  for (const st of stages) for (const e of st.E) if (st.fwd(e)) add({ s: e.s, t: e.t, w: 1 });
+  const reach = (a, b) => {
+    const seen = new Set([a]), stack = [a];
+    while (stack.length) {
+      const v = stack.pop();
+      if (v === b) return true;
+      for (const e of outE.get(v)) if (!seen.has(e.t)) { seen.add(e.t); stack.push(e.t); }
+    }
+    return false;
+  };
+  const M = [];
+  for (const m of [...msg].sort((p, q) => W.get(p.s).layer - W.get(q.s).layer)) {
+    if (m.s === m.t || reach(m.t, m.s)) continue; // würde einen Kreis bilden: nicht ausrichten
+    const e = { s: m.s, t: m.t, w: 0 };
+    add(e);
+    M.push(e);
+  }
+  if (!M.length) return;
+  const indeg = new Map([...W.keys()].map((id) => [id, inE.get(id).length]));
+  const queue = [...W.keys()].filter((id) => !indeg.get(id)), topo = [];
+  while (queue.length) {
+    const v = queue.shift();
+    topo.push(v);
+    for (const e of outE.get(v)) { indeg.set(e.t, indeg.get(e.t) - 1); if (!indeg.get(e.t)) queue.push(e.t); }
+  }
+  const L = (id) => W.get(id).layer;
+  const push = () => { for (const v of topo) for (const e of outE.get(v)) if (L(e.t) < L(v) + e.w) W.get(e.t).layer = L(v) + e.w; };
+  for (const w of W.values()) w.layer = 0;
+  push();
+  for (const v of [...topo].reverse()) {
+    if (!inE.get(v).length && outE.get(v).length) W.get(v).layer = Math.max(0, Math.min(...outE.get(v).map((e) => L(e.t) - e.w)));
+  }
+  // Sender nach rechts schieben, wenn der Empfänger später liegt: der Nachrichtenfluss wird senkrecht
+  const seq = [...W.keys()].flatMap((id) => outE.get(id).filter((e) => e.w));
+  const cost = () => {
+    let c = 2 * Math.max(...[...W.values()].map((w) => w.layer));
+    for (const e of M) c += 4 * Math.abs(L(e.t) - L(e.s));
+    for (const e of seq) c += L(e.t) - L(e.s) - 1;
+    return c;
+  };
+  let cur = cost();
+  for (let it = 0; it < 4; it++) {
+    let improved = false;
+    for (const e of [...M].sort((p, q) => L(p.s) - L(q.s))) {
+      if (L(e.t) <= L(e.s)) continue;
+      const save = new Map([...W].map(([id, w]) => [id, w.layer]));
+      W.get(e.s).layer = L(e.t);
+      push();
+      const c = cost();
+      if (c < cur) { cur = c; improved = true; } else for (const [id, l] of save) W.get(id).layer = l;
+    }
+    if (!improved) break;
+  }
+}
+
+// ---------- Nachrichtenflüsse: senkrecht, wo es geht; sonst rechtwinklig durch den Zwischenraum, an Elementen vorbei ----------
+const GAP_POOL = 70;
+
+function routeMessages({ byId, shapes, labels, edges, pools, poolOf, msg, fixed }) {
+  const res = { edges: {}, labels: {}, shifts: pools.map(() => 0) };
+  if (!msg.length) return res;
+  const box = (k) => shapes[pools[k].id];
+  const stacked = pools.every((p, k) => !k || box(k - 1).y + box(k - 1).height <= box(k).y + 1);
+  const center = (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+  if (!stacked) {
+    for (const e of msg) if (shapes[e.source] && shapes[e.target]) res.edges[e.id] = [center(shapes[e.source]), center(shapes[e.target])];
+    return res;
+  }
+  // Hindernisse: Elemente und Beschriftungen; Linien nur, wenn sie deckungsgleich verlaufen würden
+  const solids = [];
+  for (const [id, b] of Object.entries(shapes)) {
+    const n = byId.get(id);
+    if (!n || n.type === 'Group' || n.type === 'Lane') continue;
+    if (n.type === 'Participant') {
+      // Name eines zugeklappten Pools steht in der Mitte
+      if (n.expanded === false) { const w = Math.min(b.width - 40, (n.name?.length ?? 0) * 7 + 30); solids.push({ id: `name:${id}`, x: b.x + b.width / 2 - w / 2, y: b.y, width: w, height: b.height }); }
+      else solids.push({ id: `name:${id}`, x: b.x, y: b.y, width: 30, height: b.height });
+      continue;
+    }
+    if (isContainer(n)) continue;
+    solids.push({ id, ...b });
+  }
+  for (const [id, b] of Object.entries(labels)) solids.push({ id: `label:${id}`, owner: id, ...b });
+  const vsegs = [], hsegs = [];
+  const addSegs = (pts) => {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      if (a.x === b.x) vsegs.push({ x: a.x, lo: Math.min(a.y, b.y), hi: Math.max(a.y, b.y) });
+      else if (a.y === b.y) hsegs.push({ y: a.y, lo: Math.min(a.x, b.x), hi: Math.max(a.x, b.x) });
+    }
+  };
+  for (const pts of Object.values(edges)) addSegs(pts);
+  const vFree = (x, y1, y2, skip) => {
+    const lo = Math.min(y1, y2), hi = Math.max(y1, y2);
+    return !solids.some((o) => !skip?.has(o.id) && o.x - 4 < x && o.x + o.width + 4 > x && o.y < hi && o.y + o.height > lo)
+      && !vsegs.some((v) => Math.abs(v.x - x) < 6 && v.lo < hi - 1 && v.hi > lo + 1);
+  };
+  const hFree = (y, x1, x2, skip) => {
+    const lo = Math.min(x1, x2), hi = Math.max(x1, x2);
+    return !solids.some((o) => !skip?.has(o.id) && o.y - 4 < y && o.y + o.height + 4 > y && o.x < hi && o.x + o.width > lo)
+      && !hsegs.some((h) => Math.abs(h.y - y) < 6 && h.lo < hi - 1 && h.hi > lo + 1);
+  };
+  const xMin = Math.min(...pools.map((_, k) => box(k).x)) + 40, xMax = Math.max(...pools.map((_, k) => box(k).x + box(k).width)) - 10;
+  // nächstgelegene freie Stelle links/rechts von c
+  const nearest = (c, test, exclude = () => false) => {
+    for (let k = 1; k < 90; k++) for (const x of [c + k * 8, c - k * 8]) if (x > xMin && x < xMax && !exclude(x) && test(x)) return x;
+    return null;
+  };
+  const isPool = (id) => byId.get(id)?.type === 'Participant';
+  const border = (k, dir) => (dir > 0 ? box(k).y + box(k).height : box(k).y);
+  const OFFS = [0, -10, 10, -20, 20, -30, 30, -40, 40];
+
+  // Mögliche direkte Anschlüsse eines Elements in Richtung dir (senkrecht bis zum Poolrand frei)
+  const direct = (id, dir, yb, others) => {
+    const b = shapes[id], c = b.x + b.width / 2, skip = new Set([id, `label:${id}`]), yEdge = dir > 0 ? b.y + b.height : b.y;
+    const xs = [...new Set([...others, ...OFFS.map((d) => c + d)])].filter((x) => Math.abs(x - c) <= b.width / 2 - 8 || x === c);
+    return xs.filter((x) => vFree(x, yEdge + dir, yb, skip)).map((x) => ({ x, pts: [{ x, y: yEdge }], cost: Math.abs(x - c) / 10 }));
+  };
+  // Umweg: kurz heraus, seitlich in eine freie Gasse, dann zum Poolrand
+  const detour = (id, dir, yb) => {
+    const b = shapes[id], c = b.x + b.width / 2, skip = new Set([id, `label:${id}`]);
+    for (const side of [dir, -dir]) {
+      const y0 = side > 0 ? b.y + b.height : b.y;
+      for (const dj of [14, 8, 20]) {
+        const yJ = y0 + side * dj;
+        for (const d of OFFS) {
+          const xo = c + d;
+          if (Math.abs(d) > b.width / 2 - 8 || !vFree(xo, y0 + side, yJ, skip)) continue;
+          const x = nearest(xo, (x) => hFree(yJ, xo, x, skip) && vFree(x, yJ, yb, skip), (x) => Math.abs(x - c) < b.width / 2 + 6);
+          if (x !== null) return { x, pts: [{ x: xo, y: y0 }, { x: xo, y: yJ }, { x, y: yJ }], cost: 5 + Math.abs(x - c) / 50 };
+        }
+      }
+    }
+    return null;
+  };
+
+  const horiz = []; // waagerechte Stücke in den Zwischenräumen: { gap, xTop, xBot, a, b }
+  const order = (e) => Math.abs(poolOf(e.source) - poolOf(e.target)) * 1e6 + (shapes[e.source]?.x ?? 0);
+  for (const e of [...msg].sort((p, q) => order(p) - order(q))) {
+    const i = poolOf(e.source), j = poolOf(e.target);
+    if (i === undefined || j === undefined || i === j || !shapes[e.source] || !shapes[e.target]) continue;
+    const dir = j > i ? 1 : -1, ybS = border(i, dir), ybT = border(j, -dir);
+    const cS = center(shapes[e.source]).x, cT = center(shapes[e.target]).x;
+    let S, T;
+    if (isPool(e.source) && isPool(e.target)) {
+      const x = nearest(Math.max(box(i).x, box(j).x) + 100, (x) => vFree(x, ybS, ybT)) ?? box(i).x + 100;
+      S = { x, pts: [{ x, y: ybS }] }; T = { x, pts: [{ x, y: ybT }] };
+    } else {
+      const candS = isPool(e.source) ? null : direct(e.source, dir, ybS, [cT, ...OFFS.map((d) => cT + d)]);
+      const candT = isPool(e.target) ? null : direct(e.target, -dir, ybT, [cS, ...OFFS.map((d) => cS + d)]);
+      const through = (x) => { for (let k = i + dir; k !== j; k += dir) if (!vFree(x, box(k).y - 1, box(k).y + box(k).height + 1)) return false; return vFree(x, ybS, ybT); };
+      if (!candS) { T = candT.find((t) => through(t.x)) ?? candT[0] ?? detour(e.target, -dir, ybT) ?? { x: cT, pts: [{ x: cT, y: dir > 0 ? shapes[e.target].y : shapes[e.target].y + shapes[e.target].height }] }; S = { x: T.x, pts: [{ x: T.x, y: ybS }] }; }
+      else if (!candT) { S = candS.find((t) => through(t.x)) ?? candS[0] ?? detour(e.source, dir, ybS) ?? { x: cS, pts: [{ x: cS, y: dir > 0 ? shapes[e.source].y + shapes[e.source].height : shapes[e.source].y }] }; T = { x: S.x, pts: [{ x: S.x, y: ybT }] }; }
+      else {
+        let best = null;
+        for (const a of candS) for (const b of candT) {
+          const c = a.cost + b.cost + (a.x === b.x ? (through(a.x) ? 0 : 3) : 2 + Math.abs(a.x - b.x) / 100);
+          if (!best || c < best.c) best = { c, a, b };
+        }
+        S = best?.a ?? candS[0] ?? detour(e.source, dir, ybS) ?? { x: cS, pts: [{ x: cS, y: dir > 0 ? shapes[e.source].y + shapes[e.source].height : shapes[e.source].y }] };
+        T = best?.b ?? candT[0] ?? detour(e.target, -dir, ybT) ?? { x: cT, pts: [{ x: cT, y: dir > 0 ? shapes[e.target].y : shapes[e.target].y + shapes[e.target].height }] };
+      }
+    }
+    // Pools dazwischen an einer freien Stelle durchqueren
+    const g1 = dir > 0 ? i : i - 1, g2 = dir > 0 ? j - 1 : j;
+    const between = (x) => { for (let k = i + dir; k !== j; k += dir) if (!vFree(x, box(k).y - 1, box(k).y + box(k).height + 1)) return false; return true; };
+    let xm = S.x;
+    if (g1 !== g2 && !between(xm)) xm = between(T.x) ? T.x : nearest((S.x + T.x) / 2, between) ?? S.x;
+    if (g1 === g2) xm = T.x;
+    // Poolrand als Ziel/Quelle: dort anschließen, wo die Linie ohnehin ankommt
+    if (isPool(e.target) && g1 !== g2) T = { x: xm, pts: [{ x: xm, y: ybT }] };
+    if (isPool(e.source) && g1 !== g2) S = { x: xm, pts: [{ x: xm, y: ybS }] };
+    const mid = [];
+    const jog = (gap, xa, xb) => {
+      if (xa === xb) return;
+      const h = { gap, xTop: dir > 0 ? xa : xb, xBot: dir > 0 ? xb : xa, a: { x: xa, gap }, b: { x: xb, gap } };
+      horiz.push(h);
+      mid.push(h.a, h.b);
+    };
+    jog(g1, S.x, xm);
+    if (g1 !== g2) jog(g2, xm, T.x);
+    const pts = [...S.pts.map((p) => ({ ...p, pool: i })), ...mid, ...[...T.pts].reverse().map((p) => ({ ...p, pool: j }))];
+    res.edges[e.id] = pts;
+    // vorläufig eintragen, damit spätere Flüsse nicht deckungsgleich verlaufen
+    const yGap = (g) => (box(g).y + box(g).height + box(g + 1).y) / 2;
+    addSegs(simplify(pts.map((p) => ({ x: p.x, y: p.gap !== undefined ? yGap(p.gap) : p.y }))));
+  }
+
+  // Waagerechte Stücke je Zwischenraum auf Spuren verteilen (so, dass sie sich möglichst nicht kreuzen)
+  const need = pools.map(() => GAP_POOL);
+  const trackY = new Map();
+  for (let g = 0; g < pools.length - 1; g++) {
+    const hs = horiz.filter((h) => h.gap === g);
+    const key = (h) => (h.xTop < h.xBot ? [0, -h.xTop] : [1, h.xTop]);
+    hs.sort((p, q) => key(p)[0] - key(q)[0] || key(p)[1] - key(q)[1]);
+    const used = [];
+    for (const h of hs) {
+      const lo = Math.min(h.xTop, h.xBot) - 10, hi = Math.max(h.xTop, h.xBot) + 10;
+      let t = 0;
+      while (used[t]?.some((o) => o.lo < hi && o.hi > lo)) t++;
+      (used[t] ??= []).push({ lo, hi });
+      h.track = t;
+    }
+    const n = used.length, have = box(g + 1).y - (box(g).y + box(g).height);
+    const step = fixed ? Math.min(12, Math.max(4, (have - 24) / Math.max(1, n - 1))) : 12;
+    if (!fixed) need[g] = Math.max(GAP_POOL, 44 + 12 * Math.max(0, n - 1));
+    for (const h of hs) trackY.set(h, { step, n });
+  }
+  if (!fixed) for (let k = 1; k < pools.length; k++) res.shifts[k] = res.shifts[k - 1] + need[k - 1] - (box(k).y - (box(k - 1).y + box(k - 1).height));
+  const top = (g) => box(g).y + box(g).height + res.shifts[g], bottom = (g) => box(g + 1).y + res.shifts[g + 1];
+  for (const h of horiz) {
+    const { step, n } = trackY.get(h);
+    const y = Math.round((top(h.gap) + bottom(h.gap)) / 2 - ((n - 1) * step) / 2 + h.track * step);
+    h.a.y = y; h.b.y = y;
+  }
+  const placed = [];
+  const hit = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  for (const e of msg) {
+    const raw = res.edges[e.id];
+    if (!raw || raw[0].y === undefined) continue;
+    const pts = simplify(raw.map((p) => ({ x: p.x, y: p.pool !== undefined ? p.y + res.shifts[p.pool] : p.y })));
+    res.edges[e.id] = pts;
+    if (!e.label?.width || !raw.some((p) => p.pool !== undefined)) continue;
+    // Beschriftung in den Zwischenraum direkt hinter dem Sender
+    const i = poolOf(e.source), dir = poolOf(e.target) > i ? 1 : -1, g = dir > 0 ? i : i - 1;
+    const w = e.label.width, h = e.label.height, y1 = top(g) + 3, y2 = bottom(g) - 3 - h;
+    const hz = horiz.find((s) => s.gap === g && (s.a === raw.find((p) => p.gap === g)));
+    const x0 = raw.filter((p) => p.pool === i).pop()?.x ?? raw[0].x, cands = [];
+    if (hz && Math.abs(hz.xTop - hz.xBot) >= w + 14) cands.push({ x: Math.min(hz.a.x, hz.b.x) + 8, y: hz.a.y - h - 3 });
+    for (let y = y1; y <= y2; y += 8) cands.push({ x: x0 + 6, y }, { x: x0 - 6 - w, y });
+    const others = Object.entries(res.edges).filter(([id]) => id !== e.id).map(([, p]) => p);
+    const ok = (c) => !placed.some((o) => hit({ ...c, width: w, height: h }, o))
+      && !others.some((p) => p.some((a, k) => k < p.length - 1 && a.y !== undefined && hit({ ...c, width: w, height: h }, { x: Math.min(a.x, p[k + 1].x) - 2, y: Math.min(a.y, p[k + 1].y) - 2, width: Math.abs(a.x - p[k + 1].x) + 4, height: Math.abs(a.y - p[k + 1].y) + 4 })));
+    const c = cands.find(ok) ?? cands[0];
+    if (c) { res.labels[e.id] = { x: c.x, y: c.y, width: w, height: h }; placed.push(res.labels[e.id]); }
+  }
+  return res;
+}
+
+// Nur die Nachrichtenflüsse neu verlegen; alle Elemente und übrigen Linien bleiben, wo sie sind.
+function rerouteMessages(graph) {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const shapes = {}, labels = {}, edges = {};
+  for (const n of graph.nodes) {
+    if (n.x === undefined) continue;
+    shapes[n.id] = { x: n.x, y: n.y, width: n.width, height: n.height };
+    if (n.label?.x !== undefined && n.name) labels[n.id] = n.label;
+  }
+  const msg = graph.edges.filter((e) => e.type === 'MessageFlow');
+  for (const e of graph.edges) {
+    if (e.type === 'MessageFlow') continue;
+    if (e.waypoints?.length > 1) edges[e.id] = e.waypoints;
+    if (e.label?.x !== undefined && e.name) labels[e.id] = e.label;
+  }
+  const pools = graph.nodes.filter((n) => n.type === 'Participant' && shapes[n.id]).sort((a, b) => a.y - b.y);
+  const idx = new Map(pools.map((p, k) => [p.id, k]));
+  const poolOf = (id) => { for (let n = byId.get(id); n; n = byId.get(n.parent)) if (idx.has(n.id)) return idx.get(n.id); return undefined; };
+  const r = routeMessages({ byId, shapes, labels, edges, pools, poolOf, msg, fixed: true });
+  const out = { shapes: {}, labels: r.labels, edges: r.edges };
+  const round = (o) => { for (const k of Object.keys(o)) o[k] = Math.round(o[k]); };
+  Object.values(out.labels).forEach(round);
+  Object.values(out.edges).forEach((pts) => pts.forEach(round));
+  return out;
+}
+
 // ---------- Gesamtes Diagramm ----------
-export function computeLayout(graph) {
+// opts.only = 'messageFlows': nur Nachrichtenflüsse neu verlegen (manuelle Anordnung bleibt erhalten)
+// opts.poolOrder = [IDs oder Namen]: Reihenfolge der Pools von oben nach unten (sonst automatisch nach Nachrichtenflüssen)
+// opts.align = false: Pools nicht aneinander ausrichten (jeder Pool für sich, wie früher)
+export function computeLayout(graph, opts = {}) {
+  if (opts.only === 'messageFlows') return rerouteMessages(graph);
   const nodes = graph.nodes.map((n) => ({ ...n }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const kids = new Map();
@@ -515,62 +858,98 @@ export function computeLayout(graph) {
     if (!kids.has(p)) kids.set(p, []);
     kids.get(p).push(n);
   }
-  const ctx = { kids, edges: graph.edges };
+  const ctx = { kids, edges: graph.edges, msg: new Map() };
   const out = { shapes: {}, labels: {}, edges: {} };
-  const pools = (kids.get('') ?? []).filter((n) => n.type === 'Participant');
-  const poolOf = new Map();
+  let pools = (kids.get('') ?? []).filter((n) => n.type === 'Participant');
+  const msg = graph.edges.filter((e) => e.type === 'MessageFlow');
 
   if (pools.length) {
+    const poolIdOf = (id) => { for (let n = byId.get(id); n; n = byId.get(n.parent)) if (n.type === 'Participant') return n.id; return undefined; };
+    const weight = new Map();
+    const orig = new Map(pools.map((p, i) => [p.id, i]));
+    for (const e of msg) {
+      const a = orig.get(poolIdOf(e.source)), b = orig.get(poolIdOf(e.target));
+      if (a === undefined || b === undefined || a === b) continue;
+      const k = `${Math.min(a, b)}|${Math.max(a, b)}`;
+      weight.set(k, (weight.get(k) ?? 0) + 1);
+    }
+    pools = orderPools(pools, weight, opts.poolOrder);
+    const idx = new Map(pools.map((p, k) => [p.id, k]));
+    const poolOf = (id) => idx.get(poolIdOf(id));
+    // Wohin laufen die Nachrichtenflüsse eines Elements (für die Lage der Ereignis-Beschriftungen)?
+    for (const e of msg) {
+      const a = poolOf(e.source), b = poolOf(e.target);
+      if (a === undefined || b === undefined || a === b) continue;
+      for (const [id, down] of [[e.source, b > a], [e.target, a > b]]) {
+        const m = ctx.msg.get(id) ?? {};
+        m[down ? 'down' : 'up'] = true;
+        ctx.msg.set(id, m);
+      }
+    }
     const parts = pools.map((p) => {
       const lanes = (kids.get(p.id) ?? []).filter((n) => n.type === 'Lane');
-      const r = layoutFlow(ctx, p.id, lanes.map((l) => l.id));
-      const empty = !Object.keys(r.shapes).length;
-      const ox = 60 + (lanes.length ? 30 : 0);
-      return { p, lanes, r, empty, ox, w: empty ? p.width : r.width + ox + 40, h: empty ? p.height : Math.max(r.height + 60, 120) };
+      return { p, lanes, gen: flowGen(ctx, p.id, lanes.map((l) => l.id)), ox: 60 + (lanes.length ? 30 : 0) };
     });
-    const W = Math.max(...parts.map((q) => q.w));
-    let y = 0;
-    for (const q of parts) {
-      for (const id of Object.keys(q.r.shapes)) poolOf.set(id, q.p.id);
-      const ly = q.r.laneY.map((v) => v + y + 30);
-      merge(out, q.r, q.ox, y + 30);
-      out.shapes[q.p.id] = { x: 0, y, width: W, height: q.h };
-      q.lanes.forEach((l, k) => {
-        const y1 = k ? ly[k - 1] : y, y2 = k < q.lanes.length - 1 ? ly[k] : y + q.h;
-        out.shapes[l.id] = { x: 30, y: y1, width: W - 30, height: y2 - y1 };
-      });
-      y += q.h + 70;
+    const stages = parts.map((q) => q.gen.next().value);
+    if (opts.align !== false) {
+      const top = (id, k) => {
+        let n = byId.get(id);
+        if (n?.type === 'BoundaryEvent') n = byId.get(n.host) ?? n;
+        while (n && !stages[k].N.has(n.id)) n = byId.get(n.parent);
+        return n?.id;
+      };
+      const M = [];
+      for (const e of msg) {
+        const a = poolOf(e.source), b = poolOf(e.target);
+        if (a === undefined || b === undefined || a === b) continue;
+        const s = top(e.source, a), t = top(e.target, b);
+        if (s && t) M.push({ s, t });
+      }
+      alignLayers(stages, M);
     }
+    const grids = parts.map((q) => q.gen.next().value);
+    const len = Math.max(...grids.map((g) => g.lw.length));
+    const shared = { shared: true, lw: [], gap: [] };
+    for (let i = 0; i < len; i++) {
+      shared.lw[i] = Math.max(...grids.map((g) => g.lw[i] ?? 20));
+      shared.gap[i] = Math.max(...grids.map((g) => g.gap[i] ?? GAP_X));
+    }
+    for (const q of parts) {
+      q.r = q.gen.next(opts.align !== false ? shared : { ...grids[parts.indexOf(q)], shared: true }).value;
+      q.empty = !Object.keys(q.r.shapes).length;
+      q.h = q.empty ? q.p.height : Math.max(q.r.height + 60, 120);
+    }
+    const full = parts.filter((q) => !q.empty);
+    const OX = Math.max(60, ...full.map((q) => q.ox));
+    const x1 = full.length ? Math.min(...full.map((q) => q.r.x0)) : 0, x2 = full.length ? Math.max(...full.map((q) => q.r.x0 + q.r.width)) : 0;
+    const X = x1 - OX, W = Math.max(x2 - x1 + OX + 40, ...parts.filter((q) => q.empty).map((q) => (full.length ? 0 : q.p.width)), 300);
+    const owner = new Map(); // Element/Verbindung -> Pool-Index
+    let y = 0;
+    parts.forEach((q, k) => {
+      for (const id of [...Object.keys(q.r.shapes), ...Object.keys(q.r.edges), ...Object.keys(q.r.labels)]) owner.set(id, k);
+      const ly = q.r.laneY.map((v) => v + y + 30);
+      merge(out, q.r, 0, y + 30);
+      out.shapes[q.p.id] = { x: X, y, width: W, height: q.h };
+      owner.set(q.p.id, k);
+      q.lanes.forEach((l, n) => {
+        const y1 = n ? ly[n - 1] : y, y2 = n < q.lanes.length - 1 ? ly[n] : y + q.h;
+        out.shapes[l.id] = { x: X + 30, y: y1, width: W - 30, height: y2 - y1 };
+        owner.set(l.id, k);
+      });
+      y += q.h + GAP_POOL;
+    });
+    const r = routeMessages({ byId, shapes: out.shapes, labels: out.labels, edges: out.edges, pools, poolOf, msg });
+    for (const [id, k] of owner) {
+      const dy = r.shifts[k];
+      if (!dy) continue;
+      if (out.shapes[id]) out.shapes[id].y += dy;
+      if (out.labels[id]) out.labels[id].y += dy;
+      if (out.edges[id]) for (const p of out.edges[id]) p.y += dy;
+    }
+    Object.assign(out.edges, r.edges);
+    Object.assign(out.labels, r.labels);
   } else {
     merge(out, layoutFlow(ctx, '', []), 0, 0);
-  }
-
-  // Nachrichtenflüsse zwischen Pools
-  const obstacles = () => Object.entries(out.shapes).filter(([id]) => byId.get(id) && !isContainer(byId.get(id)) && byId.get(id).type !== 'Group');
-  let mi = 0;
-  for (const e of graph.edges) {
-    if (e.type !== 'MessageFlow') continue;
-    const s = out.shapes[e.source], t = out.shapes[e.target];
-    if (!s || !t) continue;
-    const isPool = (id) => byId.get(id)?.type === 'Participant';
-    const down = s.y + s.height <= t.y + 1, upw = t.y + t.height <= s.y + 1;
-    if (!down && !upw) { out.edges[e.id] = [{ x: s.x + s.width / 2, y: s.y + s.height / 2 }, { x: t.x + t.width / 2, y: t.y + t.height / 2 }]; continue; }
-    const dodge = (id, box, y1, y2) => {
-      const lo = Math.min(y1, y2), hi = Math.max(y1, y2), c = box.x + box.width / 2;
-      for (const d of [0, -30, 30, -42, 42]) {
-        if (Math.abs(d) > box.width / 2 - 6) continue;
-        if (!obstacles().some(([o, b]) => o !== id && b.x - 4 < c + d && b.x + b.width + 4 > c + d && b.y < hi && b.y + b.height > lo)) return c + d;
-      }
-      return c;
-    };
-    const sp = out.shapes[poolOf.get(e.source) ?? e.source], tp = out.shapes[poolOf.get(e.target) ?? e.target];
-    const ys = down ? s.y + s.height : s.y, yt = down ? t.y : t.y + t.height;
-    const ym = (down ? (sp.y + sp.height + tp.y) / 2 : (tp.y + tp.height + sp.y) / 2) + ((mi++ % 5) - 2) * 8;
-    let xs = isPool(e.source) ? null : dodge(e.source, s, ys, ym), xt = isPool(e.target) ? null : dodge(e.target, t, yt, ym);
-    xs ??= xt ?? s.x + s.width / 2 + mi * 20;
-    xt ??= xs;
-    out.edges[e.id] = simplify([{ x: xs, y: ys }, { x: xs, y: ym }, { x: xt, y: ym }, { x: xt, y: yt }]);
-    if (e.label) out.labels[e.id] = edgeLabelBox(out.edges[e.id], e.label);
   }
 
   // Assoziationen / Datenassoziationen: direkte Linie zwischen den Rändern
